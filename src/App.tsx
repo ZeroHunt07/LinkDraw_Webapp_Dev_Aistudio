@@ -492,7 +492,14 @@ function LinkDrawApp() {
               try {
                 await signInWithGoogle();
               } catch (err) {
-                setAuthError(err instanceof Error ? err.message : 'Google Sign-In failed.');
+                const msg = err instanceof Error ? err.message : 'Google Sign-In failed.';
+                if (msg.includes('auth/unauthorized-domain')) {
+                  setAuthError(
+                    `Domain "${window.location.hostname}" is not in Firebase Auth Authorized Domains yet. Add it in Firebase Console → Authentication → Settings → Authorized domains.`
+                  );
+                } else {
+                  setAuthError(msg);
+                }
               } finally {
                 setSigningIn(false);
               }
