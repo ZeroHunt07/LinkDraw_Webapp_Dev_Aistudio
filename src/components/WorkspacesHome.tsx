@@ -6,6 +6,7 @@ import {
   KeyRound,
   LogOut,
   Plus,
+  Radio,
   Search,
   Share2,
   Trash2,
@@ -14,8 +15,8 @@ import {
   X,
 } from 'lucide-react';
 import type { GraphDocument, StarterTemplateId, WorkspaceBoard } from '../types/linkdraw';
-import { createStarterTemplate } from '../lib/templates';
 import { exportLinkDrawJSON, parseLinkDrawJSON, triggerFileDownload } from '../lib/exportEngine';
+import { fetchCollabBoardGraph } from '../lib/firestoreSync';
 
 interface WorkspacesHomeProps {
   uid: string;
@@ -32,6 +33,7 @@ interface WorkspacesHomeProps {
   }) => Promise<void>;
   onJoinBoard: (code: string) => Promise<void>;
   onDuplicateBoard: (board: WorkspaceBoard) => Promise<void>;
+  onPromoteToShared: (board: WorkspaceBoard) => Promise<void>;
   onDeleteOrLeaveBoard: (board: WorkspaceBoard) => Promise<void>;
   onNotify: (msg: string) => void;
 }
@@ -71,6 +73,7 @@ export const WorkspacesHome: React.FC<WorkspacesHomeProps> = ({
   onCreateBoard,
   onJoinBoard,
   onDuplicateBoard,
+  onPromoteToShared,
   onDeleteOrLeaveBoard,
   onNotify,
 }) => {
@@ -176,13 +179,15 @@ export const WorkspacesHome: React.FC<WorkspacesHomeProps> = ({
     }
   };
 
-  const handleExportBoardJson = (board: WorkspaceBoard) => {
-    if (!board.graphData) {
-      onNotify('Open the shared board on Canvas to export its live elements.');
-      return;
+  const handleExportBoardJson = async (board: WorkspaceBoard) => {
+    try {
+      const graphData = board.graphData ?? (await fetchCollabBoardGraph(board));
+      const json = exportLinkDrawJSON(graphData, board.title);
+      triggerFileDownload(`${board.title.replace(/\s+/g, '_')}.linkdraw.json`, json, 'application/json');
+      onNotify(`Exported "${board.title}" as LinkDraw JSON.`);
+    } catch {
+      onNotify('Failed to export board.');
     }
-    const json = exportLinkDrawJSON(board.graphData, board.title);
-    triggerFileDownload(`${board.title.replace(/\s+/g, '_')}.linkdraw.json`, json, 'application/json');
   };
 
   return (
@@ -369,23 +374,28 @@ export const WorkspacesHome: React.FC<WorkspacesHomeProps> = ({
                         </button>
                       )}
                       {board.kind === 'personal' && (
-                        <>
-                          <button
-                            onClick={() => onDuplicateBoard(board)}
-                            title="Duplicate board"
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          >
-                            <Copy className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => handleExportBoardJson(board)}
-                            title="Export LinkDraw JSON"
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          >
-                            <Download className="w-4 h-4" />
-                          </button>
-                        </>
+                        <button
+                          onClick={() => onPromoteToShared(board)}
+                          title="Publish as Shared Live Board (get 6-char invite code for Mobile sync)"
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors"
+                        >
+                          <Radio className="w-4 h-4" />
+                        </button>
                       )}
+                      <button
+                        onClick={() => onDuplicateBoard(board)}
+                        title="Duplicate as personal board"
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Copy className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleExportBoardJson(board)}
+                        title="Export LinkDraw JSON"
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      >
+                        <Download className="w-4 h-4" />
+                      </button>
                       <button
                         onClick={() => onDeleteOrLeaveBoard(board)}
                         title={board.kind === 'shared' && !isOwner ? 'Leave board' : 'Delete board'}

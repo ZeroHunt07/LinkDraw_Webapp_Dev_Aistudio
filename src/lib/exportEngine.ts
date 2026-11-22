@@ -43,6 +43,45 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     return cleaned || fallback;
   };
 
+  const normalizeTableData = (rawNode: Record<string, unknown>): GraphNode['tableData'] => {
+    const td = (rawNode.tableData ?? rawNode.table_data) as Record<string, unknown> | null | undefined;
+    if (td && typeof td === 'object') {
+      const headers = Array.isArray(td.headers) ? td.headers.map(String) : ['Col 1', 'Col 2'];
+      const rawRows = Array.isArray(td.rows) ? td.rows : [];
+      const rows = rawRows.map((r) => {
+        if (Array.isArray(r)) return r.map(String);
+        if (r && typeof r === 'object' && 'cells' in r && Array.isArray((r as { cells: unknown[] }).cells)) {
+          return (r as { cells: unknown[] }).cells.map(String);
+        }
+        return [];
+      });
+      return { headers, rows };
+    }
+    if (Array.isArray(rawNode.tableHeaders) || Array.isArray(rawNode.tableRows)) {
+      const headers = Array.isArray(rawNode.tableHeaders) ? rawNode.tableHeaders.map(String) : ['Col 1', 'Col 2'];
+      const rows = Array.isArray(rawNode.tableRows)
+        ? rawNode.tableRows.map((r) =>
+            r && typeof r === 'object' && 'cells' in r && Array.isArray((r as { cells: unknown[] }).cells)
+              ? (r as { cells: unknown[] }).cells.map(String)
+              : Array.isArray(r)
+              ? r.map(String)
+              : []
+          )
+        : [];
+      return { headers, rows };
+    }
+    return null;
+  };
+
+  const toTimestampMs = (val: unknown): number => {
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (typeof val === 'string') {
+      const parsedMs = Date.parse(val);
+      if (Number.isFinite(parsedMs)) return parsedMs;
+    }
+    return Date.now();
+  };
+
   const nodes: GraphNode[] = rawNodes.map((n: Record<string, unknown>, idx) => ({
     id: sanitizeId(n.id, `n_${idx}`),
     x: Number(n.x ?? 0),
@@ -52,7 +91,7 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     text: String(n.text ?? 'Node'),
     shape: (n.shape as GraphNode['shape']) ?? 'rounded',
     color: String(n.color ?? '#dbeafe'),
-    textColor: n.textColor ? String(n.textColor) : undefined,
+    textColor: n.textColor ? String(n.textColor) : n.text_color ? String(n.text_color) : undefined,
     fs: n.fs ? Number(n.fs) : 13,
     icon: n.icon ? String(n.icon) : '',
     iconPosition: (n.iconPosition ?? n.icon_position ?? 'inline') as GraphNode['iconPosition'],
@@ -66,9 +105,9 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     collapsed: Boolean(n.collapsed),
     locked: Boolean(n.locked),
     layer: (n.layer as GraphNode['layer']) ?? 'Data',
-    tableData: (n.tableData ?? n.table_data ?? null) as GraphNode['tableData'],
-    createdAt: Number(n.createdAt ?? Date.now()),
-    updatedAt: Number(n.updatedAt ?? Date.now()),
+    tableData: normalizeTableData(n),
+    createdAt: toTimestampMs(n.createdAt ?? n.createdAtMs ?? n.created_at),
+    updatedAt: toTimestampMs(n.updatedAt ?? n.updatedAtMs ?? n.updated_at),
   }));
 
   const edges: GraphEdge[] = rawEdges.map((e: Record<string, unknown>, idx) => ({
@@ -83,8 +122,8 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     lineStyle: (e.lineStyle ?? e.line_style ?? 'solid') as GraphEdge['lineStyle'],
     weight: Number(e.weight ?? 1),
     layer: (e.layer as GraphEdge['layer']) ?? 'Data',
-    createdAt: Number(e.createdAt ?? Date.now()),
-    updatedAt: Number(e.updatedAt ?? Date.now()),
+    createdAt: toTimestampMs(e.createdAt ?? e.createdAtMs ?? e.created_at),
+    updatedAt: toTimestampMs(e.updatedAt ?? e.updatedAtMs ?? e.updated_at),
   }));
 
   const stickies = rawStickies.map((s: Record<string, unknown>, idx) => ({
@@ -96,8 +135,8 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     text: String(s.text ?? ''),
     color: String(s.color ?? '#fef08a'),
     layer: (s.layer as GraphNode['layer']) ?? 'Annotations',
-    createdAt: Number(s.createdAt ?? Date.now()),
-    updatedAt: Number(s.updatedAt ?? Date.now()),
+    createdAt: toTimestampMs(s.createdAt ?? s.createdAtMs ?? s.created_at),
+    updatedAt: toTimestampMs(s.updatedAt ?? s.updatedAtMs ?? s.updated_at),
   }));
 
   const strokes = rawStrokes.map((st: Record<string, unknown>, idx) => ({
@@ -113,8 +152,13 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     width: Number(st.width ?? 3),
     tool: (st.tool === 'highlight' ? 'highlight' : 'pen') as 'pen' | 'highlight',
     layer: (st.layer as GraphNode['layer']) ?? 'Annotations',
-    createdAt: Number(st.createdAt ?? Date.now()),
+    createdAt: toTimestampMs(st.createdAt ?? st.createdAtMs ?? st.created_at),
   }));
+
+  const rawSettings =
+    parsed.settings && typeof parsed.settings === 'object'
+      ? (parsed.settings as Record<string, unknown>)
+      : {};
 
   return {
     title: parsed.title ? String(parsed.title) : undefined,
@@ -130,14 +174,11 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
             { name: 'Data', visible: true, locked: false },
             { name: 'Annotations', visible: true, locked: false },
           ],
-      settings:
-        parsed.settings && typeof parsed.settings === 'object'
-          ? {
-              gridSnap: Boolean((parsed.settings as Record<string, unknown>).gridSnap ?? true),
-              gridSize: Number((parsed.settings as Record<string, unknown>).gridSize ?? 20),
-              flowAnimation: Boolean((parsed.settings as Record<string, unknown>).flowAnimation ?? true),
-            }
-          : { gridSnap: true, gridSize: 20, flowAnimation: true },
+      settings: {
+        gridSnap: Boolean(rawSettings.gridSnap ?? rawSettings.grid_snap ?? true),
+        gridSize: Number(rawSettings.gridSize ?? rawSettings.grid_size ?? 20),
+        flowAnimation: Boolean(rawSettings.flowAnimation ?? rawSettings.flow_animation ?? true),
+      },
     },
   };
 }

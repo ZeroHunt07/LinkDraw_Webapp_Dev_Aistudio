@@ -55,6 +55,7 @@ import {
   triggerFileDownload,
 } from '../lib/exportEngine';
 import { makeSafeId } from '../lib/firestoreSync';
+import { firebaseProjectId, firestoreDatabaseId } from '../lib/firebase';
 
 interface UtilitiesSuiteProps {
   activeSubTab: UtilitySubTab;
@@ -62,6 +63,7 @@ interface UtilitiesSuiteProps {
   boardTitle: string;
   graph: GraphDocument;
   theme: ThemeMode;
+  userId: string;
   userEmail: string;
   userName: string;
   onChangeTheme: (t: ThemeMode) => void;
@@ -78,6 +80,7 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
   boardTitle,
   graph,
   theme,
+  userId,
   userEmail,
   userName,
   onChangeTheme,
@@ -979,21 +982,60 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
                 </label>
               </div>
 
-              {/* User Account Card */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold truncate">{userName}</div>
-                  <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
-                    {userEmail}
+              {/* User Account & Android Sync Card */}
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold truncate">{userName}</div>
+                    <div className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                      {userEmail}
+                    </div>
+                  </div>
+                  <button
+                    onClick={onSignOut}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 shrink-0"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    Sign Out
+                  </button>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2 text-xs">
+                  <div className="font-medium text-slate-700 dark:text-slate-300">
+                    Android &amp; Cross-Device Cloud Sync Target
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 leading-relaxed">
+                    Projects sync automatically across LinkDraw Android and Web when both apps sign in with the same Google account and target the same Firebase Project and Firestore Database ID below:
+                  </p>
+                  <div className="space-y-1.5 pt-1 font-mono text-[11px]">
+                    {[
+                      { label: 'Project ID', value: firebaseProjectId },
+                      { label: 'Database ID', value: firestoreDatabaseId },
+                      { label: 'User UID', value: userId },
+                    ].map((row) => (
+                      <div
+                        key={row.label}
+                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800"
+                      >
+                        <span className="text-slate-500 shrink-0">{row.label}</span>
+                        <span className="truncate text-slate-800 dark:text-slate-200">{row.value}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard.writeText(row.value).then(
+                              () => onNotify(`Copied ${row.label}.`),
+                              () => onNotify('Clipboard copy failed.')
+                            );
+                          }}
+                          title={`Copy ${row.label}`}
+                          className="p-1 text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 shrink-0"
+                        >
+                          <Copy className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 </div>
-                <button
-                  onClick={onSignOut}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 shrink-0"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  Sign Out
-                </button>
               </div>
             </div>
           </div>

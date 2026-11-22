@@ -32,6 +32,7 @@ import {
   deleteBoardComment,
   deleteUserNote,
   deleteWorkspaceBoard,
+  fetchCollabBoardGraph,
   joinCollabBoardByCode,
   leaveCollabBoard,
   makeSafeId,
@@ -400,14 +401,38 @@ function LinkDrawApp() {
 
   const handleDuplicateBoard = async (board: WorkspaceBoard) => {
     if (!user) return;
-    const sourceGraph = board.graphData ?? EMPTY_GRAPH;
+    const sourceGraph = board.graphData ?? (await fetchCollabBoardGraph(board));
     await createPersonalBoard(
       user.uid,
       `${board.title} (Copy)`,
       board.description,
       cloneGraph(sourceGraph)
     );
-    notify(`Duplicated "${board.title}".`);
+    notify(`Duplicated "${board.title}" as a personal board.`);
+  };
+
+  const handlePromoteToShared = async (board: WorkspaceBoard) => {
+    if (!user) return;
+    const sourceGraph = board.graphData ?? EMPTY_GRAPH;
+    const displayName = user.displayName || user.email || 'User';
+    const created = await createCollabBoard(
+      user.uid,
+      displayName,
+      board.title,
+      board.description,
+      cloneGraph(sourceGraph)
+    );
+    setUndoStack([]);
+    setRedoStack([]);
+    lastCollabHashesRef.current = new Map();
+    setActiveBoardId(created.id);
+    setGraph(cloneGraph(sourceGraph));
+    setSection('canvas');
+    notify(
+      created.inviteCode
+        ? `Published "${created.title}" as Shared Live · Code ${created.inviteCode}`
+        : `Published "${created.title}" as Shared Live.`
+    );
   };
 
   const handleDeleteOrLeaveBoard = async (board: WorkspaceBoard) => {
@@ -653,6 +678,7 @@ function LinkDrawApp() {
             onCreateBoard={handleCreateBoard}
             onJoinBoard={handleJoinBoard}
             onDuplicateBoard={handleDuplicateBoard}
+            onPromoteToShared={handlePromoteToShared}
             onDeleteOrLeaveBoard={handleDeleteOrLeaveBoard}
             onNotify={notify}
           />
@@ -762,6 +788,7 @@ function LinkDrawApp() {
             boardTitle={activeBoard?.title ?? 'No Active Board'}
             graph={graph}
             theme={theme}
+            userId={user.uid}
             userEmail={user.email || ''}
             userName={user.displayName || 'LinkDraw Analyst'}
             onChangeTheme={setTheme}

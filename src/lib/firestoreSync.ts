@@ -91,7 +91,19 @@ export function encodeNodePayload(node: GraphNode): Record<string, unknown> {
 
 export function decodeNodePayload(id: string, p: Record<string, unknown>): GraphNode {
   let tableData: GraphNode['tableData'] = null;
-  if (Array.isArray(p.tableHeaders) || Array.isArray(p.tableRows)) {
+  const rawTableObj = (p.tableData ?? p.table_data) as Record<string, unknown> | null | undefined;
+  if (rawTableObj && typeof rawTableObj === 'object') {
+    const headers = Array.isArray(rawTableObj.headers) ? rawTableObj.headers.map(String) : ['Col 1', 'Col 2'];
+    const rawRows = Array.isArray(rawTableObj.rows) ? rawTableObj.rows : [];
+    const rows = rawRows.map((r) => {
+      if (r && typeof r === 'object' && 'cells' in r && Array.isArray((r as { cells: unknown[] }).cells)) {
+        return (r as { cells: unknown[] }).cells.map(String);
+      }
+      if (Array.isArray(r)) return r.map(String);
+      return [];
+    });
+    tableData = { headers, rows };
+  } else if (Array.isArray(p.tableHeaders) || Array.isArray(p.tableRows)) {
     const headers = Array.isArray(p.tableHeaders) ? p.tableHeaders.map(String) : ['Col 1', 'Col 2'];
     const rows = Array.isArray(p.tableRows)
       ? p.tableRows.map((r) => {
@@ -105,6 +117,9 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
     tableData = { headers, rows };
   }
 
+  const rawTextColor = p.textColor ?? p.text_color;
+  const rawIconPosition = p.iconPosition ?? p.icon_position ?? 'inline';
+
   return {
     id: String(p.id ?? id),
     x: Number(p.x ?? 0),
@@ -114,10 +129,10 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
     text: String(p.text ?? 'Node'),
     shape: (p.shape as GraphNode['shape']) ?? 'rounded',
     color: String(p.color ?? '#dbeafe'),
-    textColor: p.textColor ? String(p.textColor) : undefined,
+    textColor: rawTextColor ? String(rawTextColor) : undefined,
     fs: Number(p.fs ?? 13),
     icon: p.icon ? String(p.icon) : '',
-    iconPosition: (p.iconPosition as GraphNode['iconPosition']) ?? 'inline',
+    iconPosition: (rawIconPosition as GraphNode['iconPosition']) ?? 'inline',
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
     metadata:
       p.metadata && typeof p.metadata === 'object'
@@ -131,8 +146,8 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
     locked: Boolean(p.locked),
     layer: (p.layer as GraphNode['layer']) ?? 'Data',
     tableData,
-    createdAt: Number(p.createdAtMs ?? Date.now()),
-    updatedAt: Number(p.updatedAtMs ?? Date.now()),
+    createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
+    updatedAt: toMillis(p.updatedAtMs ?? p.updatedAt ?? p.updated_at),
   };
 }
 
@@ -164,11 +179,11 @@ export function decodeEdgePayload(id: string, p: Record<string, unknown>): Graph
     width: Number(p.width ?? 2),
     arrow: (p.arrow as GraphEdge['arrow']) ?? 'forward',
     type: (p.type as GraphEdge['type']) ?? 'curved',
-    lineStyle: (p.lineStyle as GraphEdge['lineStyle']) ?? 'solid',
+    lineStyle: ((p.lineStyle ?? p.line_style) as GraphEdge['lineStyle']) ?? 'solid',
     weight: Number(p.weight ?? 1),
     layer: (p.layer as GraphEdge['layer']) ?? 'Data',
-    createdAt: Number(p.createdAtMs ?? Date.now()),
-    updatedAt: Number(p.updatedAtMs ?? Date.now()),
+    createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
+    updatedAt: toMillis(p.updatedAtMs ?? p.updatedAt ?? p.updated_at),
   };
 }
 
@@ -197,8 +212,8 @@ export function decodeStickyPayload(id: string, p: Record<string, unknown>): Sti
     text: String(p.text ?? ''),
     color: String(p.color ?? '#fef08a'),
     layer: (p.layer as StickyNote['layer']) ?? 'Annotations',
-    createdAt: Number(p.createdAtMs ?? Date.now()),
-    updatedAt: Number(p.updatedAtMs ?? Date.now()),
+    createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
+    updatedAt: toMillis(p.updatedAtMs ?? p.updatedAt ?? p.updated_at),
   };
 }
 
@@ -222,16 +237,20 @@ export function decodeStrokePayload(id: string, p: Record<string, unknown>): Fre
   return {
     id: String(p.id ?? id),
     points: Array.isArray(p.points)
-      ? p.points.map((pt) => ({
-          x: Number((pt as { x: number }).x ?? 0),
-          y: Number((pt as { y: number }).y ?? 0),
-        }))
+      ? p.points.map((pt) =>
+          Array.isArray(pt)
+            ? { x: Number(pt[0] ?? 0), y: Number(pt[1] ?? 0) }
+            : {
+                x: Number((pt as { x: number }).x ?? 0),
+                y: Number((pt as { y: number }).y ?? 0),
+              }
+        )
       : [],
     color: String(p.color ?? '#ef4444'),
     width: Number(p.width ?? 3),
     tool: p.tool === 'highlight' ? 'highlight' : 'pen',
     layer: (p.layer as FreehandStroke['layer']) ?? 'Annotations',
-    createdAt: Number(p.createdAtMs ?? Date.now()),
+    createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
   };
 }
 
@@ -251,16 +270,20 @@ export function subscribeCollabBoards(
           kind: 'shared',
           title: String(data.title ?? 'Untitled Shared Board'),
           description: String(data.description ?? ''),
-          ownerId: String(data.ownerId ?? ''),
-          ownerName: String(data.ownerName ?? 'Owner'),
-          inviteCode: String(data.inviteCode ?? ''),
-          memberUids: Array.isArray(data.memberUids) ? data.memberUids.map(String) : [],
-          memberNames: (data.memberNames as Record<string, string>) ?? {},
-          gridSnap: Boolean(data.gridSnap ?? true),
-          gridSize: Number(data.gridSize ?? 20),
-          flowAnimation: Boolean(data.flowAnimation ?? true),
-          createdAt: toMillis(data.createdAt),
-          updatedAt: toMillis(data.updatedAt),
+          ownerId: String(data.ownerId ?? data.owner_id ?? ''),
+          ownerName: String(data.ownerName ?? data.owner_name ?? 'Owner'),
+          inviteCode: String(data.inviteCode ?? data.invite_code ?? ''),
+          memberUids: Array.isArray(data.memberUids)
+            ? data.memberUids.map(String)
+            : Array.isArray(data.member_uids)
+            ? data.member_uids.map(String)
+            : [],
+          memberNames: ((data.memberNames ?? data.member_names) as Record<string, string>) ?? {},
+          gridSnap: Boolean(data.gridSnap ?? data.grid_snap ?? true),
+          gridSize: Number(data.gridSize ?? data.grid_size ?? 20),
+          flowAnimation: Boolean(data.flowAnimation ?? data.flow_animation ?? true),
+          createdAt: toMillis(data.createdAt ?? data.created_at),
+          updatedAt: toMillis(data.updatedAt ?? data.updated_at),
         };
       });
       onChange(boards);
@@ -274,49 +297,101 @@ export function subscribePersonalBoards(
   onChange: (boards: WorkspaceBoard[]) => void
 ): Unsubscribe {
   const path = `users/${uid}/personal_boards`;
-  const q = query(collection(db, path), orderBy('updatedAt', 'desc'));
+  // Avoid Firestore orderBy('updatedAt') so mobile docs lacking updatedAt are still returned
   return onSnapshot(
-    q,
+    collection(db, path),
     (snap) => {
-      const boards: WorkspaceBoard[] = snap.docs.map((d) => {
-        const data = d.data();
-        const rawGraph = (data.graphData as Record<string, unknown>) ?? {};
-        const nodes = Array.isArray(rawGraph.nodes)
-          ? rawGraph.nodes.map((n, i) => decodeNodePayload(`n_${i}`, n as Record<string, unknown>))
-          : [];
-        const edges = Array.isArray(rawGraph.edges)
-          ? rawGraph.edges.map((e, i) => decodeEdgePayload(`e_${i}`, e as Record<string, unknown>))
-          : [];
-        const stickies = Array.isArray(rawGraph.stickies)
-          ? rawGraph.stickies.map((s, i) => decodeStickyPayload(`s_${i}`, s as Record<string, unknown>))
-          : [];
-        const strokes = Array.isArray(rawGraph.strokes)
-          ? rawGraph.strokes.map((st, i) => decodeStrokePayload(`st_${i}`, st as Record<string, unknown>))
-          : [];
-        const settings = (rawGraph.settings as GraphDocument['settings']) ?? { ...DEFAULT_SETTINGS };
-        const layers = Array.isArray(rawGraph.layers)
-          ? (rawGraph.layers as GraphDocument['layers'])
-          : DEFAULT_LAYERS.map((l) => ({ ...l }));
+      const boards: WorkspaceBoard[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          const rawGraph = ((data.graphData ?? data.graph_data ?? data) as Record<string, unknown>) ?? {};
+          const rawNodes = Array.isArray(rawGraph.nodes) ? rawGraph.nodes : [];
+          const rawEdges = Array.isArray(rawGraph.edges)
+            ? rawGraph.edges
+            : Array.isArray(rawGraph.conns)
+            ? rawGraph.conns
+            : [];
+          const rawStickies = Array.isArray(rawGraph.stickies)
+            ? rawGraph.stickies
+            : Array.isArray(rawGraph.sticky_notes)
+            ? rawGraph.sticky_notes
+            : [];
+          const rawStrokes = Array.isArray(rawGraph.strokes)
+            ? rawGraph.strokes
+            : Array.isArray(rawGraph.freehand_strokes)
+            ? rawGraph.freehand_strokes
+            : [];
 
-        return {
-          id: d.id,
-          kind: 'personal',
-          title: String(data.title ?? 'Untitled Board'),
-          description: String(data.description ?? ''),
-          ownerId: String(data.ownerId ?? uid),
-          ownerName: 'You',
-          gridSnap: Boolean(settings.gridSnap ?? true),
-          gridSize: Number(settings.gridSize ?? 20),
-          flowAnimation: Boolean(settings.flowAnimation ?? true),
-          createdAt: toMillis(data.createdAt),
-          updatedAt: toMillis(data.updatedAt),
-          graphData: { nodes, edges, stickies, strokes, layers, settings },
-        };
-      });
+          const nodes = rawNodes.map((n, i) => decodeNodePayload(`n_${i}`, n as Record<string, unknown>));
+          const edges = rawEdges.map((e, i) => decodeEdgePayload(`e_${i}`, e as Record<string, unknown>));
+          const stickies = rawStickies.map((s, i) => decodeStickyPayload(`s_${i}`, s as Record<string, unknown>));
+          const strokes = rawStrokes.map((st, i) => decodeStrokePayload(`st_${i}`, st as Record<string, unknown>));
+          const rawSettings = ((rawGraph.settings as Record<string, unknown>) ?? {}) as Record<string, unknown>;
+          const settings: GraphDocument['settings'] = {
+            gridSnap: Boolean(rawSettings.gridSnap ?? rawSettings.grid_snap ?? DEFAULT_SETTINGS.gridSnap),
+            gridSize: Number(rawSettings.gridSize ?? rawSettings.grid_size ?? DEFAULT_SETTINGS.gridSize),
+            flowAnimation: Boolean(
+              rawSettings.flowAnimation ?? rawSettings.flow_animation ?? DEFAULT_SETTINGS.flowAnimation
+            ),
+          };
+          const layers = Array.isArray(rawGraph.layers)
+            ? (rawGraph.layers as GraphDocument['layers'])
+            : DEFAULT_LAYERS.map((l) => ({ ...l }));
+
+          return {
+            id: d.id,
+            kind: 'personal' as const,
+            title: String(data.title ?? 'Untitled Board'),
+            description: String(data.description ?? ''),
+            ownerId: String(data.ownerId ?? data.owner_id ?? uid),
+            ownerName: 'You',
+            gridSnap: settings.gridSnap,
+            gridSize: settings.gridSize,
+            flowAnimation: settings.flowAnimation,
+            createdAt: toMillis(data.createdAt ?? data.created_at),
+            updatedAt: toMillis(data.updatedAt ?? data.updated_at),
+            graphData: { nodes, edges, stickies, strokes, layers, settings },
+          };
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt);
       onChange(boards);
     },
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
+}
+
+export async function fetchCollabBoardGraph(board: WorkspaceBoard): Promise<GraphDocument> {
+  const path = `collab_boards/${board.id}/elements`;
+  try {
+    const snap = await getDocs(collection(db, path));
+    const nodes: GraphNode[] = [];
+    const edges: GraphEdge[] = [];
+    const stickies: StickyNote[] = [];
+    const strokes: FreehandStroke[] = [];
+    for (const d of snap.docs) {
+      const data = d.data();
+      const kind = String(data.kind ?? '');
+      const payload = (data.payload as Record<string, unknown>) ?? {};
+      if (kind === 'node') nodes.push(decodeNodePayload(d.id, payload));
+      else if (kind === 'edge') edges.push(decodeEdgePayload(d.id, payload));
+      else if (kind === 'sticky') stickies.push(decodeStickyPayload(d.id, payload));
+      else if (kind === 'stroke') strokes.push(decodeStrokePayload(d.id, payload));
+    }
+    return {
+      nodes,
+      edges,
+      stickies,
+      strokes,
+      layers: DEFAULT_LAYERS.map((l) => ({ ...l })),
+      settings: {
+        gridSnap: board.gridSnap,
+        gridSize: board.gridSize,
+        flowAnimation: board.flowAnimation,
+      },
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.LIST, path);
+  }
 }
 
 // --- Create / Duplicate / Join / Delete Workspaces ---
@@ -896,39 +971,48 @@ export function subscribeUserNotes(
   onChange: (notes: NoteRecord[]) => void
 ): Unsubscribe {
   const path = `users/${uid}/notes`;
-  const q = query(collection(db, path), orderBy('updatedAt', 'desc'));
   return onSnapshot(
-    q,
+    collection(db, path),
     (snap) => {
-      const notes: NoteRecord[] = snap.docs.map((d) => {
-        const data = d.data();
-        return {
-          id: d.id,
-          ownerId: String(data.ownerId ?? uid),
-          boardId: data.boardId ? String(data.boardId) : null,
-          title: String(data.title ?? 'Untitled Note'),
-          body: String(data.body ?? ''),
-          noteType: (data.noteType as NoteRecord['noteType']) ?? 'Observation',
-          sourceUrl: String(data.sourceUrl ?? ''),
-          folder: String(data.folder ?? ''),
-          tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-          priority: (data.priority as NoteRecord['priority']) ?? 'normal',
-          color: String(data.color ?? '#ffffff'),
-          pinned: Boolean(data.pinned),
-          archived: Boolean(data.archived),
-          linkedNodeId: data.linkedNodeId ? String(data.linkedNodeId) : null,
-          linkedNodeName: data.linkedNodeName ? String(data.linkedNodeName) : null,
-          checklist: Array.isArray(data.checklist)
-            ? data.checklist.map((item) => ({
-                text: String((item as { text?: string }).text ?? ''),
-                checked: Boolean((item as { checked?: boolean }).checked),
-              }))
-            : [],
-          wordCount: Number(data.wordCount ?? 0),
-          createdAt: toMillis(data.createdAt),
-          updatedAt: toMillis(data.updatedAt),
-        };
-      });
+      const notes: NoteRecord[] = snap.docs
+        .map((d) => {
+          const data = d.data();
+          return {
+            id: d.id,
+            ownerId: String(data.ownerId ?? data.owner_id ?? uid),
+            boardId: data.boardId ? String(data.boardId) : data.board_id ? String(data.board_id) : null,
+            title: String(data.title ?? 'Untitled Note'),
+            body: String(data.body ?? ''),
+            noteType: ((data.noteType ?? data.note_type) as NoteRecord['noteType']) ?? 'Observation',
+            sourceUrl: String(data.sourceUrl ?? data.source_url ?? ''),
+            folder: String(data.folder ?? ''),
+            tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
+            priority: (data.priority as NoteRecord['priority']) ?? 'normal',
+            color: String(data.color ?? '#ffffff'),
+            pinned: Boolean(data.pinned),
+            archived: Boolean(data.archived),
+            linkedNodeId: data.linkedNodeId
+              ? String(data.linkedNodeId)
+              : data.linked_node_id
+              ? String(data.linked_node_id)
+              : null,
+            linkedNodeName: data.linkedNodeName
+              ? String(data.linkedNodeName)
+              : data.linked_node_name
+              ? String(data.linked_node_name)
+              : null,
+            checklist: Array.isArray(data.checklist)
+              ? data.checklist.map((item) => ({
+                  text: String((item as { text?: string }).text ?? ''),
+                  checked: Boolean((item as { checked?: boolean }).checked),
+                }))
+              : [],
+            wordCount: Number(data.wordCount ?? data.word_count ?? 0),
+            createdAt: toMillis(data.createdAt ?? data.created_at),
+            updatedAt: toMillis(data.updatedAt ?? data.updated_at),
+          };
+        })
+        .sort((a, b) => b.updatedAt - a.updatedAt);
       onChange(notes);
     },
     (err) => handleFirestoreError(err, OperationType.LIST, path)
