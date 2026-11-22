@@ -147,6 +147,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     | { mode: 'drag_sticky'; id: string; startWx: number; startWy: number; origX: number; origY: number; moved: boolean }
     | { mode: 'marquee'; startWx: number; startWy: number; currWx: number; currWy: number }
     | { mode: 'draw_stroke'; stroke: FreehandStroke }
+    | { mode: 'erase_stroke'; onlyHighlight: boolean; lastWx: number; lastWy: number; erasedAny: boolean }
   >({ mode: 'none' });
   const pointerWorldRef = useRef<{ x: number; y: number } | null>(null);
   const badgeHitsRef = useRef<BadgeHitTarget[]>([]);
@@ -161,7 +162,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (
       gestureRef.current.mode !== 'drag_nodes' &&
       gestureRef.current.mode !== 'drag_sticky' &&
-      gestureRef.current.mode !== 'draw_stroke'
+      gestureRef.current.mode !== 'draw_stroke' &&
+      gestureRef.current.mode !== 'erase_stroke'
     ) {
       liveGraphRef.current = graph;
     }
@@ -234,6 +236,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         else if (k === 's') setTool('sticky');
         else if (k === 'p') setTool('pen');
         else if (k === 'h') setTool('highlight');
+        else if (k === 'x') setTool(e.shiftKey ? 'highlight_eraser' : 'eraser');
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -378,6 +381,53 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (graph.strokes.length === 0) return;
     onCommitGraph({ ...graph, strokes: [] }, true);
   };
+
+  const clearHighlightInk = () => {
+    const remaining = graph.strokes.filter((s) => s.tool !== 'highlight');
+    if (remaining.length === graph.strokes.length) return;
+    onCommitGraph({ ...graph, strokes: remaining }, true);
+  };
+
+  // Sweep-erase strokes along world segment (x1,y1)->(x2,y2)
+  const applyEraserSweep = useCallback(
+    (x1: number, y1: number, x2: number, y2: number, onlyHighlight: boolean): boolean => {
+      const g = liveGraphRef.current;
+      if (g.strokes.length === 0) return false;
+      const layerMap = new Map(g.layers.map((l) => [l.name, l]));
+      const baseRadius = (onlyHighlight ? 16 : 14) / cameraRef.current.scale;
+      let removedAny = false;
+
+      const kept = g.strokes.filter((st) => {
+        if (onlyHighlight && st.tool !== 'highlight') return true;
+        const layer = layerMap.get(st.layer);
+        if (layer && (!layer.visible || layer.locked)) return true;
+        if (st.points.length === 0) return false;
+
+        const tol = baseRadius + st.width / 2;
+        if (st.points.length === 1) {
+          const hit =
+            pointToSegmentDistSq(st.points[0].x, st.points[0].y, x1, y1, x2, y2) <= tol * tol;
+          if (hit) removedAny = true;
+          return !hit;
+        }
+        for (let i = 0; i < st.points.length - 1; i++) {
+          const p0 = st.points[i];
+          const p1 = st.points[i + 1];
+          if (segmentsIntersectOrClose(x1, y1, x2, y2, p0.x, p0.y, p1.x, p1.y, tol)) {
+            removedAny = true;
+            return false;
+          }
+        }
+        return true;
+      });
+
+      if (removedAny) {
+        liveGraphRef.current = { ...g, strokes: kept };
+      }
+      return removedAny;
+    },
+    []
+  );
 
   // Search matching set
   const matchingNodeIds = useMemo(() => {
@@ -536,6 +586,20 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         createdAt: Date.now(),
       };
       gestureRef.current = { mode: 'draw_stroke', stroke };
+      return;
+    }
+
+    // Tool: Eraser or Highlighter Eraser
+    if (tool === 'eraser' || tool === 'highlight_eraser') {
+      const onlyHighlight = tool === 'highlight_eraser';
+      const erased = applyEraserSweep(wx, wy, wx, wy, onlyHighlight);
+      gestureRef.current = {
+        mode: 'erase_stroke',
+        onlyHighlight,
+        lastWx: wx,
+        lastWy: wy,
+        erasedAny: erased,
+      };
       return;
     }
 
@@ -782,6 +846,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       if (!last || Math.hypot(wx - last.x, wy - last.y) >= 3) {
         pts.push({ x: wx, y: wy });
       }
+      return;
+    }
+
+    if (gest.mode === 'erase_stroke') {
+      const erased = applyEraserSweep(gest.lastWx, gest.lastWy, wx, wy, gest.onlyHighlight);
+      if (erased) gest.erasedAny = true;
+      gest.lastWx = wx;
+      gest.lastWy = wy;
     }
   };
 
@@ -850,6 +922,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         };
         liveGraphRef.current = next;
         onCommitGraph(next, true);
+      }
+      return;
+    }
+
+    if (gest.mode === 'erase_stroke') {
+      gestureRef.current = { mode: 'none' };
+      if (gest.erasedAny) {
+        onCommitGraph(liveGraphRef.current, true);
       }
       return;
     }
@@ -1312,6 +1392,25 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             ctx.restore();
           }
 
+          // 6. Eraser / Highlighter Eraser Cursor Ring
+          if ((tool === 'eraser' || tool === 'highlight_eraser') && pointerWorldRef.current) {
+            const p = pointerWorldRef.current;
+            const r = (tool === 'highlight_eraser' ? 16 : 14) / cam.scale;
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+            ctx.fillStyle =
+              tool === 'highlight_eraser'
+                ? 'rgba(250, 204, 21, 0.22)'
+                : 'rgba(239, 68, 68, 0.14)';
+            ctx.strokeStyle = tool === 'highlight_eraser' ? '#eab308' : '#ef4444';
+            ctx.lineWidth = 1.5 / cam.scale;
+            ctx.setLineDash([4 / cam.scale, 3 / cam.scale]);
+            ctx.fill();
+            ctx.stroke();
+            ctx.restore();
+          }
+
           ctx.restore(); // End world transform
           ctx.restore(); // End DPR scale
 
@@ -1368,6 +1467,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUpOrCancel}
         onPointerCancel={handlePointerUpOrCancel}
+        onPointerLeave={() => {
+          pointerWorldRef.current = null;
+        }}
         className={`w-full h-full block touch-none ${
           tool === 'select' ? 'cursor-default' : 'cursor-crosshair'
         }`}
@@ -1590,14 +1692,24 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             </div>
           </div>
 
-          <button
-            onClick={clearFreehandInk}
-            disabled={graph.strokes.length === 0}
-            className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-600 disabled:opacity-40"
-          >
-            <Eraser className="w-3.5 h-3.5" />
-            Clear Freehand Ink ({graph.strokes.length})
-          </button>
+          <div className="space-y-1.5">
+            <button
+              onClick={clearHighlightInk}
+              disabled={!graph.strokes.some((s) => s.tool === 'highlight')}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-amber-50 dark:hover:bg-amber-950/30 hover:text-amber-700 dark:hover:text-amber-300 disabled:opacity-40"
+            >
+              <Eraser className="w-3.5 h-3.5 text-amber-500" />
+              Clear Highlights Only ({graph.strokes.filter((s) => s.tool === 'highlight').length})
+            </button>
+            <button
+              onClick={clearFreehandInk}
+              disabled={graph.strokes.length === 0}
+              className="w-full inline-flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-600 disabled:opacity-40"
+            >
+              <Eraser className="w-3.5 h-3.5" />
+              Clear All Freehand Ink ({graph.strokes.length})
+            </button>
+          </div>
         </div>
       )}
 
@@ -1631,16 +1743,24 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         <div className="pointer-events-auto flex flex-wrap items-center gap-1 p-1 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-xs">
           {(
             [
-              { id: 'select', icon: MousePointer2, label: 'Select' },
-              { id: 'add_node', icon: PlusSquare, label: 'Add Node' },
-              { id: 'connect', icon: Spline, label: 'Connect' },
-              { id: 'sticky', icon: StickyIcon, label: 'Sticky' },
-              { id: 'pen', icon: Pen, label: 'Pen' },
-              { id: 'highlight', icon: Highlighter, label: 'Highlight' },
+              { id: 'select', icon: MousePointer2, label: 'Select', title: 'Select (V)' },
+              { id: 'add_node', icon: PlusSquare, label: 'Add Node', title: 'Add Node (N)' },
+              { id: 'connect', icon: Spline, label: 'Connect', title: 'Connect (C)' },
+              { id: 'sticky', icon: StickyIcon, label: 'Sticky', title: 'Sticky Note (S)' },
+              { id: 'pen', icon: Pen, label: 'Pen', title: 'Pen (P)' },
+              { id: 'highlight', icon: Highlighter, label: 'Highlight', title: 'Highlighter (H)' },
+              { id: 'eraser', icon: Eraser, label: 'Eraser', title: 'Ink Eraser (X)' },
+              {
+                id: 'highlight_eraser',
+                icon: Eraser,
+                label: 'HL Eraser',
+                title: 'Highlighter Eraser — erases highlights only (Shift+X)',
+              },
             ] as const
           ).map((item) => {
             const Icon = item.icon;
             const active = tool === item.id;
+            const isHlEraser = item.id === 'highlight_eraser';
             return (
               <button
                 key={item.id}
@@ -1648,14 +1768,25 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   setConnectSourceId(null);
                   setTool(item.id);
                 }}
-                title={item.label}
+                title={item.title}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                   active
-                    ? 'bg-blue-600 text-white'
+                    ? isHlEraser
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-blue-600 text-white'
                     : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                 }`}
               >
-                <Icon className="w-3.5 h-3.5" />
+                <span className="relative inline-flex items-center">
+                  <Icon className="w-3.5 h-3.5" />
+                  {isHlEraser && (
+                    <span
+                      className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${
+                        active ? 'bg-slate-950' : 'bg-amber-400'
+                      }`}
+                    />
+                  )}
+                </span>
                 <span className="hidden sm:inline">{item.label}</span>
               </button>
             );
@@ -2155,4 +2286,52 @@ function drawMinimap(
   ctx.strokeStyle = '#ef4444';
   ctx.lineWidth = 1.5;
   ctx.strokeRect(vx, vy, vw, vh);
+}
+
+// --- Eraser Geometry Helpers ---
+
+function pointToSegmentDistSq(
+  px: number,
+  py: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): number {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return (px - x1) * (px - x1) + (py - y1) * (py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  const projX = x1 + t * dx;
+  const projY = y1 + t * dy;
+  return (px - projX) * (px - projX) + (py - projY) * (py - projY);
+}
+
+function segmentsIntersectOrClose(
+  ax1: number,
+  ay1: number,
+  ax2: number,
+  ay2: number,
+  bx1: number,
+  by1: number,
+  bx2: number,
+  by2: number,
+  tol: number
+): boolean {
+  const tolSq = tol * tol;
+  if (
+    pointToSegmentDistSq(ax1, ay1, bx1, by1, bx2, by2) <= tolSq ||
+    pointToSegmentDistSq(ax2, ay2, bx1, by1, bx2, by2) <= tolSq ||
+    pointToSegmentDistSq(bx1, by1, ax1, ay1, ax2, ay2) <= tolSq ||
+    pointToSegmentDistSq(bx2, by2, ax1, ay1, ax2, ay2) <= tolSq
+  ) {
+    return true;
+  }
+  const ccw = (p1x: number, p1y: number, p2x: number, p2y: number, p3x: number, p3y: number) =>
+    (p3y - p1y) * (p2x - p1x) > (p2y - p1y) * (p3x - p1x);
+  return (
+    ccw(ax1, ay1, bx1, by1, bx2, by2) !== ccw(ax2, ay2, bx1, by1, bx2, by2) &&
+    ccw(ax1, ay1, ax2, ay2, bx1, by1) !== ccw(ax1, ay1, ax2, ay2, bx2, by2)
+  );
 }

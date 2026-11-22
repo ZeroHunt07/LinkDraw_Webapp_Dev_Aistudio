@@ -21,7 +21,15 @@ export type ArrowType = 'none' | 'forward' | 'backward' | 'both';
 export type LineStyle = 'solid' | 'dashed' | 'dotted';
 export type CanvasLayerName = 'Background' | 'Data' | 'Annotations';
 export type ThemeMode = 'light' | 'dark' | 'high_contrast';
-export type ToolMode = 'select' | 'add_node' | 'connect' | 'sticky' | 'pen' | 'highlight';
+export type ToolMode =
+  | 'select'
+  | 'add_node'
+  | 'connect'
+  | 'sticky'
+  | 'pen'
+  | 'highlight'
+  | 'eraser'
+  | 'highlight_eraser';
 
 export interface TableData {
   headers: string[];
