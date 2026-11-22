@@ -1,0 +1,363 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidInviteCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[A-Z0-9]{6}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- Board Relational Helpers ---
+    function boardPath(boardId) {
+      return /databases/$(database)/documents/collab_boards/$(boardId);
+    }
+
+    function isBoardMember(boardId) {
+      return exists(boardPath(boardId)) && (request.auth.uid in get(boardPath(boardId)).data.memberUids);
+    }
+
+    function isBoardOwner(boardId) {
+      return exists(boardPath(boardId)) && get(boardPath(boardId)).data.ownerId == request.auth.uid;
+    }
+
+    // --- Validation Blueprints ---
+    function isValidCollabBoard(data) {
+      return data.keys().hasAll([
+          'ownerId', 'ownerName', 'title', 'description', 'inviteCode',
+          'memberUids', 'memberNames', 'gridSnap', 'gridSize', 'flowAnimation',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'ownerName', 'title', 'description', 'inviteCode',
+          'memberUids', 'memberNames', 'gridSnap', 'gridSize', 'flowAnimation',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 120
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.description is string && data.description.size() <= 1000
+        && isValidInviteCode(data.inviteCode)
+        && data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 20
+        && data.memberUids[0] is string
+        && data.ownerId in data.memberUids
+        && data.memberNames is map && data.memberNames.size() >= 1 && data.memberNames.size() <= 20
+        && data.gridSnap is bool
+        && data.gridSize is number && data.gridSize >= 5 && data.gridSize <= 100
+        && data.flowAnimation is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardInvite(data) {
+      return data.keys().hasAll(['boardId', 'ownerId', 'title', 'createdAt'])
+        && data.keys().hasOnly(['boardId', 'ownerId', 'title', 'createdAt'])
+        && isValidId(data.boardId)
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBoardElement(data) {
+      return data.keys().hasAll(['kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt'])
+        && data.kind in ['node', 'edge', 'sticky', 'stroke']
+        && data.payload is map && data.payload.size() <= 50
+        && isValidId(data.updatedByUid)
+        && data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardPresence(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'colorHex', 'activeTab', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'colorHex', 'selectedNodeId', 'activeTab', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.colorHex is string && data.colorHex.size() >= 4 && data.colorHex.size() <= 16
+        && (!('selectedNodeId' in data) || data.selectedNodeId == null || (data.selectedNodeId is string && data.selectedNodeId.size() <= 128))
+        && data.activeTab is string && data.activeTab.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBoardComment(data) {
+      return data.keys().hasAll(['authorId', 'authorName', 'text', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['authorId', 'authorName', 'text', 'linkedNodeId', 'linkedNodeLabel', 'createdAt', 'updatedAt'])
+        && isValidId(data.authorId)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 2000
+        && (!('linkedNodeId' in data) || data.linkedNodeId == null || (data.linkedNodeId is string && data.linkedNodeId.size() <= 128))
+        && (!('linkedNodeLabel' in data) || data.linkedNodeLabel == null || (data.linkedNodeLabel is string && data.linkedNodeLabel.size() <= 200))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPersonalBoard(data) {
+      return data.keys().hasAll(['ownerId', 'title', 'description', 'graphData', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'title', 'description', 'graphData', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.description is string && data.description.size() <= 1000
+        && data.graphData is map && data.graphData.size() <= 20
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudioNote(data) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'body', 'noteType', 'folder', 'tags',
+          'priority', 'color', 'pinned', 'archived', 'checklist', 'wordCount',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'boardId', 'title', 'body', 'noteType', 'sourceUrl',
+          'folder', 'tags', 'priority', 'color', 'pinned', 'archived',
+          'linkedNodeId', 'linkedNodeName', 'checklist', 'wordCount',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerId)
+        && (!('boardId' in data) || data.boardId == null || (data.boardId is string && data.boardId.size() <= 128))
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.body is string && data.body.size() <= 50000
+        && data.noteType in ['Observation', 'Source', 'Lead', 'Analysis', 'Question', 'Action']
+        && (!('sourceUrl' in data) || data.sourceUrl == null || (data.sourceUrl is string && data.sourceUrl.size() <= 1000))
+        && data.folder is string && data.folder.size() <= 100
+        && data.tags is list && data.tags.size() <= 20 && (data.tags.size() == 0 || data.tags[0] is string)
+        && data.priority in ['urgent', 'high', 'normal', 'low']
+        && data.color is string && data.color.size() >= 4 && data.color.size() <= 16
+        && data.pinned is bool
+        && data.archived is bool
+        && (!('linkedNodeId' in data) || data.linkedNodeId == null || (data.linkedNodeId is string && data.linkedNodeId.size() <= 128))
+        && (!('linkedNodeName' in data) || data.linkedNodeName == null || (data.linkedNodeName is string && data.linkedNodeName.size() <= 200))
+        && data.checklist is list && data.checklist.size() <= 100 && (data.checklist.size() == 0 || data.checklist[0] is map)
+        && data.wordCount is number && data.wordCount >= 0 && data.wordCount <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collab Board Action Helpers ---
+    function isBoardOwnerUpdate() {
+      return existing().ownerId == request.auth.uid
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'description', 'memberUids', 'memberNames',
+          'gridSnap', 'gridSize', 'flowAnimation', 'updatedAt'
+        ]);
+    }
+
+    function isBoardMemberSettingsUpdate() {
+      return (request.auth.uid in existing().memberUids)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'gridSnap', 'gridSize', 'flowAnimation', 'updatedAt'
+        ]);
+    }
+
+    function isBoardJoinUpdate() {
+      return !(request.auth.uid in existing().memberUids)
+        && (request.auth.uid in incoming().memberUids)
+        && incoming().memberUids.hasAll(existing().memberUids)
+        && incoming().memberUids.size() == existing().memberUids.size() + 1
+        && exists(/databases/$(database)/documents/board_invites/$(existing().inviteCode))
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'memberNames', 'updatedAt']);
+    }
+
+    function isBoardLeaveUpdate() {
+      return (request.auth.uid in existing().memberUids)
+        && request.auth.uid != existing().ownerId
+        && !(request.auth.uid in incoming().memberUids)
+        && existing().memberUids.hasAll(incoming().memberUids)
+        && incoming().memberUids.size() == existing().memberUids.size() - 1
+        && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'memberNames', 'updatedAt']);
+    }
+
+    // --- Collection Rules ---
+    match /collab_boards/{boardId} {
+      allow get: if isVerifiedUser() && isValidId(boardId) && (request.auth.uid in existing().memberUids);
+      allow list: if isVerifiedUser() && (request.auth.uid in existing().memberUids);
+      allow create: if isVerifiedUser()
+        && isValidId(boardId)
+        && isValidCollabBoard(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/board_invites/$(incoming().inviteCode));
+      allow update: if isVerifiedUser()
+        && isValidId(boardId)
+        && isValidCollabBoard(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().inviteCode == existing().inviteCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isBoardOwnerUpdate() || isBoardMemberSettingsUpdate() || isBoardJoinUpdate() || isBoardLeaveUpdate());
+      allow delete: if isVerifiedUser() && isValidId(boardId) && existing().ownerId == request.auth.uid;
+
+      match /elements/{elementId} {
+        allow get: if isVerifiedUser() && isValidId(boardId) && isValidId(elementId) && isBoardMember(boardId);
+        allow list: if isVerifiedUser() && isValidId(boardId) && isBoardMember(boardId);
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(elementId)
+          && isValidBoardElement(incoming())
+          && incoming().updatedByUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardMember(boardId);
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(elementId)
+          && isValidBoardElement(incoming())
+          && incoming().updatedByUid == request.auth.uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['kind', 'payload', 'updatedByUid', 'updatedByName', 'updatedAt'])
+          && isBoardMember(boardId);
+        allow delete: if isVerifiedUser() && isValidId(boardId) && isValidId(elementId) && isBoardMember(boardId);
+      }
+
+      match /presence/{memberUid} {
+        allow get: if isVerifiedUser() && isValidId(boardId) && isValidId(memberUid) && isBoardMember(boardId);
+        allow list: if isVerifiedUser() && isValidId(boardId) && isBoardMember(boardId);
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberUid)
+          && memberUid == request.auth.uid
+          && isValidBoardPresence(incoming())
+          && incoming().uid == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardMember(boardId);
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberUid)
+          && memberUid == request.auth.uid
+          && isValidBoardPresence(incoming())
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'colorHex', 'selectedNodeId', 'activeTab', 'updatedAt'])
+          && isBoardMember(boardId);
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(memberUid)
+          && (memberUid == request.auth.uid || isBoardOwner(boardId));
+      }
+
+      match /comments/{commentId} {
+        allow get: if isVerifiedUser() && isValidId(boardId) && isValidId(commentId) && isBoardMember(boardId);
+        allow list: if isVerifiedUser() && isValidId(boardId) && isBoardMember(boardId);
+        allow create: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(commentId)
+          && isValidBoardComment(incoming())
+          && incoming().authorId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && isBoardMember(boardId);
+        allow update: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(commentId)
+          && isValidBoardComment(incoming())
+          && existing().authorId == request.auth.uid
+          && incoming().authorId == existing().authorId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['text', 'linkedNodeId', 'linkedNodeLabel', 'updatedAt'])
+          && isBoardMember(boardId);
+        allow delete: if isVerifiedUser()
+          && isValidId(boardId)
+          && isValidId(commentId)
+          && (existing().authorId == request.auth.uid || isBoardOwner(boardId));
+      }
+    }
+
+    match /board_invites/{inviteCode} {
+      allow get: if isVerifiedUser() && isValidInviteCode(inviteCode);
+      allow list: if false;
+      allow create: if isVerifiedUser()
+        && isValidInviteCode(inviteCode)
+        && isValidBoardInvite(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/collab_boards/$(incoming().boardId));
+      allow update: if false;
+      allow delete: if isVerifiedUser() && isValidInviteCode(inviteCode) && existing().ownerId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      match /personal_boards/{boardId} {
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(boardId) && request.auth.uid == userId;
+        allow list: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(boardId)
+          && request.auth.uid == userId
+          && isValidPersonalBoard(incoming())
+          && incoming().ownerId == userId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(boardId)
+          && request.auth.uid == userId
+          && isValidPersonalBoard(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'graphData', 'updatedAt']);
+        allow delete: if isVerifiedUser() && isValidId(userId) && isValidId(boardId) && request.auth.uid == userId;
+      }
+
+      match /notes/{noteId} {
+        allow get: if isVerifiedUser() && isValidId(userId) && isValidId(noteId) && request.auth.uid == userId;
+        allow list: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
+        allow create: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(noteId)
+          && request.auth.uid == userId
+          && isValidStudioNote(incoming())
+          && incoming().ownerId == userId
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(userId)
+          && isValidId(noteId)
+          && request.auth.uid == userId
+          && isValidStudioNote(incoming())
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'boardId', 'title', 'body', 'noteType', 'sourceUrl', 'folder',
+            'tags', 'priority', 'color', 'pinned', 'archived', 'linkedNodeId',
+            'linkedNodeName', 'checklist', 'wordCount', 'updatedAt'
+          ]);
+        allow delete: if isVerifiedUser() && isValidId(userId) && isValidId(noteId) && request.auth.uid == userId;
+      }
+    }
+  }
+}

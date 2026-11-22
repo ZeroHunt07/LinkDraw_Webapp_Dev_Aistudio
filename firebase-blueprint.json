@@ -1,0 +1,178 @@
+{
+  "entities": {
+    "CollabBoard": {
+      "title": "CollabBoard",
+      "description": "Shared collaborative graph workspace compatible with LinkDraw Android",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "ownerName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "inviteCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[A-Z0-9]{6}$" },
+        "memberUids": { "type": "array" },
+        "memberNames": { "type": "object" },
+        "gridSnap": { "type": "boolean" },
+        "gridSize": { "type": "number" },
+        "flowAnimation": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "ownerName",
+        "title",
+        "description",
+        "inviteCode",
+        "memberUids",
+        "memberNames",
+        "gridSnap",
+        "gridSize",
+        "flowAnimation",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "BoardInvite": {
+      "title": "BoardInvite",
+      "description": "6-character invite code lookup record for joining a shared board",
+      "type": "object",
+      "properties": {
+        "boardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["boardId", "ownerId", "title", "createdAt"]
+    },
+    "BoardElement": {
+      "title": "BoardElement",
+      "description": "Collaborative graph element (node, edge, sticky, stroke) stored in board subcollection",
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["node", "edge", "sticky", "stroke"] },
+        "payload": { "type": "object" },
+        "updatedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "updatedByName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["kind", "payload", "updatedByUid", "updatedByName", "createdAt", "updatedAt"]
+    },
+    "BoardPresence": {
+      "title": "BoardPresence",
+      "description": "Live collaborator presence and selected node state",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "colorHex": { "type": "string", "minLength": 4, "maxLength": 16 },
+        "selectedNodeId": { "type": "string", "maxLength": 128 },
+        "activeTab": { "type": "string", "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "displayName", "colorHex", "activeTab", "createdAt", "updatedAt"]
+    },
+    "BoardComment": {
+      "title": "BoardComment",
+      "description": "Collaborator comment optionally linked to a canvas node",
+      "type": "object",
+      "properties": {
+        "authorId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "authorName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "text": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "linkedNodeId": { "type": "string", "maxLength": 128 },
+        "linkedNodeLabel": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorId", "authorName", "text", "createdAt", "updatedAt"]
+    },
+    "PersonalBoard": {
+      "title": "PersonalBoard",
+      "description": "Private personal workspace owned by a single user",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "graphData": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerId", "title", "description", "graphData", "createdAt", "updatedAt"]
+    },
+    "StudioNote": {
+      "title": "StudioNote",
+      "description": "Document Studio note with folders, checklist, priority, and node link",
+      "type": "object",
+      "properties": {
+        "ownerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "boardId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "body": { "type": "string", "maxLength": 50000 },
+        "noteType": { "type": "string", "enum": ["Observation", "Source", "Lead", "Analysis", "Question", "Action"] },
+        "sourceUrl": { "type": "string", "maxLength": 1000 },
+        "folder": { "type": "string", "maxLength": 100 },
+        "tags": { "type": "array" },
+        "priority": { "type": "string", "enum": ["urgent", "high", "normal", "low"] },
+        "color": { "type": "string", "maxLength": 16 },
+        "pinned": { "type": "boolean" },
+        "archived": { "type": "boolean" },
+        "linkedNodeId": { "type": "string", "maxLength": 128 },
+        "linkedNodeName": { "type": "string", "maxLength": 200 },
+        "checklist": { "type": "array" },
+        "wordCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerId",
+        "title",
+        "body",
+        "noteType",
+        "folder",
+        "tags",
+        "priority",
+        "color",
+        "pinned",
+        "archived",
+        "checklist",
+        "wordCount",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/collab_boards/{boardId}": {
+      "schema": { "$ref": "#/entities/CollabBoard" },
+      "description": "Shared collaborative graph boards (max 20 members)"
+    },
+    "/board_invites/{inviteCode}": {
+      "schema": { "$ref": "#/entities/BoardInvite" },
+      "description": "Invite code lookup documents for joining shared boards"
+    },
+    "/collab_boards/{boardId}/elements/{elementId}": {
+      "schema": { "$ref": "#/entities/BoardElement" },
+      "description": "Graph nodes, edges, stickies, and strokes within a collaborative board"
+    },
+    "/collab_boards/{boardId}/presence/{memberUid}": {
+      "schema": { "$ref": "#/entities/BoardPresence" },
+      "description": "Live collaborator presence and selection state"
+    },
+    "/collab_boards/{boardId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/BoardComment" },
+      "description": "Discussion comments optionally linked to canvas nodes"
+    },
+    "/users/{userId}/personal_boards/{boardId}": {
+      "schema": { "$ref": "#/entities/PersonalBoard" },
+      "description": "User-private personal workspaces"
+    },
+    "/users/{userId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/StudioNote" },
+      "description": "User-private Document Studio notes"
+    }
+  }
+}
