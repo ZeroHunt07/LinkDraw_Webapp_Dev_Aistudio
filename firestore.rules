@@ -195,6 +195,47 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'memberNames', 'updatedAt']);
     }
 
+    // --- Studio Note Action Helpers ---
+    function isNoteStandardUpdate() {
+      return ('ownerId' in existing())
+        && ('createdAt' in existing())
+        && existing().createdAt is timestamp
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'boardId', 'title', 'body', 'noteType', 'sourceUrl', 'folder',
+          'tags', 'priority', 'color', 'pinned', 'archived', 'linkedNodeId',
+          'linkedNodeName', 'checklist', 'wordCount', 'updatedAt'
+        ]);
+    }
+
+    function isNoteLegacyMigrationUpdate() {
+      return (
+          !('ownerId' in existing())
+          || !('createdAt' in existing())
+          || !(existing().createdAt is timestamp)
+          || !existing().keys().hasOnly([
+            'ownerId', 'boardId', 'title', 'body', 'noteType', 'sourceUrl',
+            'folder', 'tags', 'priority', 'color', 'pinned', 'archived',
+            'linkedNodeId', 'linkedNodeName', 'checklist', 'wordCount',
+            'createdAt', 'updatedAt'
+          ])
+        )
+        && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
+        && (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'ownerId', 'boardId', 'title', 'body', 'noteType', 'sourceUrl',
+          'folder', 'tags', 'priority', 'color', 'pinned', 'archived',
+          'linkedNodeId', 'linkedNodeName', 'checklist', 'wordCount',
+          'createdAt', 'updatedAt',
+          'owner_id', 'board_id', 'note_type', 'source_url',
+          'linked_node_id', 'linked_node_name', 'word_count',
+          'created_at', 'updated_at', 'content', 'text',
+          'isPinned', 'is_pinned', 'is_archived',
+          'tagsText', 'tags_text', 'deviceId', 'device_id', 'version', 'id'
+        ]);
+    }
+
     // --- Collection Rules ---
     match /collab_boards/{boardId} {
       allow get: if isVerifiedUser() && isValidId(boardId) && (request.auth.uid in existing().memberUids);
@@ -333,44 +374,6 @@ service cloud.firestore {
       }
 
       match /notes/{noteId} {
-        function isNoteStandardUpdate() {
-          return ('ownerId' in existing())
-            && ('createdAt' in existing())
-            && existing().createdAt is timestamp
-            && incoming().ownerId == existing().ownerId
-            && incoming().createdAt == existing().createdAt
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'boardId', 'title', 'body', 'noteType', 'sourceUrl', 'folder',
-              'tags', 'priority', 'color', 'pinned', 'archived', 'linkedNodeId',
-              'linkedNodeName', 'checklist', 'wordCount', 'updatedAt'
-            ]);
-        }
-
-        function isNoteLegacyMigrationUpdate() {
-          return (
-              !('ownerId' in existing())
-              || !('createdAt' in existing())
-              || !(existing().createdAt is timestamp)
-              || !existing().keys().hasOnly([
-                'ownerId', 'boardId', 'title', 'body', 'noteType', 'sourceUrl',
-                'folder', 'tags', 'priority', 'color', 'pinned', 'archived',
-                'linkedNodeId', 'linkedNodeName', 'checklist', 'wordCount',
-                'createdAt', 'updatedAt'
-              ])
-            )
-            && (!('ownerId' in existing()) || incoming().ownerId == existing().ownerId)
-            && (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt)
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'ownerId', 'boardId', 'title', 'body', 'noteType', 'sourceUrl',
-              'folder', 'tags', 'priority', 'color', 'pinned', 'archived',
-              'linkedNodeId', 'linkedNodeName', 'checklist', 'wordCount',
-              'createdAt', 'updatedAt',
-              'owner_id', 'board_id', 'note_type', 'source_url',
-              'linked_node_id', 'linked_node_name', 'word_count',
-              'created_at', 'updated_at', 'content', 'text', 'isPinned', 'is_pinned', 'is_archived'
-            ]);
-        }
-
         allow get: if isVerifiedUser() && isValidId(userId) && isValidId(noteId) && request.auth.uid == userId;
         allow list: if isVerifiedUser() && isValidId(userId) && request.auth.uid == userId;
         allow create: if isVerifiedUser()
