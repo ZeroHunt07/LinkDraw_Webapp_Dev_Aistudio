@@ -37,6 +37,31 @@ export function makeSafeId(prefix = 'id'): string {
   return `${prefix}_${ts}_${rand}`.replace(/[^a-zA-Z0-9_-]/g, '');
 }
 
+export function sanitizeElementId(id: string, prefix = 'el'): string {
+  const raw = String(id ?? '').trim();
+  if (/^[a-zA-Z0-9_-]{1,128}$/.test(raw)) return raw;
+  const cleaned = raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  return cleaned.length > 0 ? cleaned : makeSafeId(prefix);
+}
+
+function finiteNum(val: unknown, fallback = 0): number {
+  const n = Number(val);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+export function stableStringify(val: unknown): string {
+  if (val === null || val === undefined) return 'null';
+  if (typeof val !== 'object') return JSON.stringify(val);
+  if (Array.isArray(val)) {
+    return `[${val.map((item) => (item === undefined ? 'null' : stableStringify(item))).join(',')}]`;
+  }
+  const obj = val as Record<string, unknown>;
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
 export function generateInviteCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
@@ -56,32 +81,39 @@ function toMillis(val: unknown): number {
 }
 
 export function encodeNodePayload(node: GraphNode): Record<string, unknown> {
+  const safeProgress =
+    node.progress !== null && node.progress !== undefined && Number.isFinite(Number(node.progress))
+      ? Number(node.progress)
+      : null;
+
   const payload: Record<string, unknown> = {
-    id: node.id,
-    x: Math.round(node.x * 100) / 100,
-    y: Math.round(node.y * 100) / 100,
-    w: Math.round(node.w),
-    h: Math.round(node.h),
-    text: (node.text ?? '').slice(0, 1000),
+    id: String(node.id),
+    x: Math.round(finiteNum(node.x, 0) * 100) / 100 || 0,
+    y: Math.round(finiteNum(node.y, 0) * 100) / 100 || 0,
+    w: Math.max(20, Math.round(finiteNum(node.w, 140))),
+    h: Math.max(20, Math.round(finiteNum(node.h, 58))),
+    text: String(node.text ?? '').slice(0, 1000),
     shape: node.shape ?? 'rounded',
-    color: node.color ?? '#dbeafe',
-    fs: node.fs ?? 13,
-    icon: node.icon ?? '',
+    color: String(node.color ?? '#dbeafe'),
+    fs: Math.max(8, finiteNum(node.fs, 13)),
+    icon: String(node.icon ?? ''),
     iconPosition: node.iconPosition ?? 'inline',
-    tags: (node.tags ?? []).slice(0, 20),
-    metadata: node.metadata ?? {},
-    progress: node.progress ?? null,
-    badge: node.badge ?? null,
+    tags: (node.tags ?? []).slice(0, 20).map(String),
+    metadata: node.metadata
+      ? Object.fromEntries(Object.entries(node.metadata).map(([k, v]) => [String(k), String(v ?? '')]))
+      : {},
+    progress: safeProgress,
+    badge: node.badge ? String(node.badge) : null,
     collapsed: Boolean(node.collapsed),
     locked: Boolean(node.locked),
     layer: node.layer ?? 'Data',
-    createdAtMs: node.createdAt ?? Date.now(),
-    updatedAtMs: node.updatedAt ?? Date.now(),
+    createdAtMs: finiteNum(node.createdAt, Date.now()),
+    updatedAtMs: finiteNum(node.updatedAt, Date.now()),
   };
 
-  if (node.textColor) payload.textColor = node.textColor;
+  if (node.textColor) payload.textColor = String(node.textColor);
   if (node.tableData) {
-    payload.tableHeaders = (node.tableData.headers ?? []).slice(0, 15);
+    payload.tableHeaders = (node.tableData.headers ?? []).slice(0, 15).map(String);
     payload.tableRows = (node.tableData.rows ?? []).slice(0, 50).map((row) => ({
       cells: row.map((c) => String(c ?? '')),
     }));
@@ -153,19 +185,19 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
 
 export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
   return {
-    id: edge.id,
-    a: edge.a,
-    b: edge.b,
-    label: (edge.label ?? '').slice(0, 200),
-    color: edge.color ?? '#475569',
-    width: Number(edge.width ?? 2),
+    id: String(edge.id),
+    a: String(edge.a),
+    b: String(edge.b),
+    label: String(edge.label ?? '').slice(0, 200),
+    color: String(edge.color ?? '#475569'),
+    width: Math.max(0.5, finiteNum(edge.width, 2)),
     arrow: edge.arrow ?? 'forward',
     type: edge.type ?? 'curved',
     lineStyle: edge.lineStyle ?? 'solid',
-    weight: Number(edge.weight ?? 1),
+    weight: finiteNum(edge.weight, 1),
     layer: edge.layer ?? 'Data',
-    createdAtMs: edge.createdAt ?? Date.now(),
-    updatedAtMs: edge.updatedAt ?? Date.now(),
+    createdAtMs: finiteNum(edge.createdAt, Date.now()),
+    updatedAtMs: finiteNum(edge.updatedAt, Date.now()),
   };
 }
 
@@ -189,16 +221,16 @@ export function decodeEdgePayload(id: string, p: Record<string, unknown>): Graph
 
 export function encodeStickyPayload(sticky: StickyNote): Record<string, unknown> {
   return {
-    id: sticky.id,
-    x: Math.round(sticky.x * 100) / 100,
-    y: Math.round(sticky.y * 100) / 100,
-    w: Math.round(sticky.w),
-    h: Math.round(sticky.h),
-    text: (sticky.text ?? '').slice(0, 2000),
-    color: sticky.color ?? '#fef08a',
+    id: String(sticky.id),
+    x: Math.round(finiteNum(sticky.x, 0) * 100) / 100 || 0,
+    y: Math.round(finiteNum(sticky.y, 0) * 100) / 100 || 0,
+    w: Math.max(40, Math.round(finiteNum(sticky.w, 170))),
+    h: Math.max(40, Math.round(finiteNum(sticky.h, 110))),
+    text: String(sticky.text ?? '').slice(0, 2000),
+    color: String(sticky.color ?? '#fef08a'),
     layer: sticky.layer ?? 'Annotations',
-    createdAtMs: sticky.createdAt ?? Date.now(),
-    updatedAtMs: sticky.updatedAt ?? Date.now(),
+    createdAtMs: finiteNum(sticky.createdAt, Date.now()),
+    updatedAtMs: finiteNum(sticky.updatedAt, Date.now()),
   };
 }
 
@@ -223,13 +255,16 @@ export function encodeStrokePayload(stroke: FreehandStroke): Record<string, unkn
     ? stroke.points.filter((_, idx) => idx % 2 === 0 || idx === stroke.points.length - 1)
     : stroke.points;
   return {
-    id: stroke.id,
-    points: pts.map((pt) => ({ x: Math.round(pt.x * 10) / 10, y: Math.round(pt.y * 10) / 10 })),
-    color: stroke.color,
-    width: stroke.width,
-    tool: stroke.tool,
+    id: String(stroke.id),
+    points: pts.map((pt) => ({
+      x: Math.round(finiteNum(pt.x, 0) * 10) / 10 || 0,
+      y: Math.round(finiteNum(pt.y, 0) * 10) / 10 || 0,
+    })),
+    color: String(stroke.color ?? '#ef4444'),
+    width: Math.max(1, finiteNum(stroke.width, 3)),
+    tool: stroke.tool === 'highlight' ? 'highlight' : 'pen',
     layer: stroke.layer ?? 'Annotations',
-    createdAtMs: stroke.createdAt ?? Date.now(),
+    createdAtMs: finiteNum(stroke.createdAt, Date.now()),
   };
 }
 
@@ -436,52 +471,72 @@ export async function createCollabBoard(
     handleFirestoreError(err, OperationType.CREATE, `collab_boards/${boardId}`);
   }
 
-  // Write initial template elements in a second batch so Master Gate exists() passes
-  const batch2 = writeBatch(db);
+  // Write initial template elements in chunked batches so Master Gate exists() passes
   const elemCol = collection(db, `collab_boards/${boardId}/elements`);
+  const initialWrites: { docId: string; data: Record<string, unknown> }[] = [];
+
   for (const n of initialGraph.nodes) {
-    batch2.set(doc(elemCol, n.id), {
-      kind: 'node',
-      payload: encodeNodePayload(n),
-      updatedByUid: uid,
-      updatedByName: safeName,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    initialWrites.push({
+      docId: sanitizeElementId(n.id, 'n'),
+      data: {
+        kind: 'node',
+        payload: encodeNodePayload(n),
+        updatedByUid: uid,
+        updatedByName: safeName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
     });
   }
   for (const e of initialGraph.edges) {
-    batch2.set(doc(elemCol, e.id), {
-      kind: 'edge',
-      payload: encodeEdgePayload(e),
-      updatedByUid: uid,
-      updatedByName: safeName,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    initialWrites.push({
+      docId: sanitizeElementId(e.id, 'e'),
+      data: {
+        kind: 'edge',
+        payload: encodeEdgePayload(e),
+        updatedByUid: uid,
+        updatedByName: safeName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
     });
   }
   for (const s of initialGraph.stickies) {
-    batch2.set(doc(elemCol, s.id), {
-      kind: 'sticky',
-      payload: encodeStickyPayload(s),
-      updatedByUid: uid,
-      updatedByName: safeName,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    initialWrites.push({
+      docId: sanitizeElementId(s.id, 's'),
+      data: {
+        kind: 'sticky',
+        payload: encodeStickyPayload(s),
+        updatedByUid: uid,
+        updatedByName: safeName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
     });
   }
   for (const st of initialGraph.strokes) {
-    batch2.set(doc(elemCol, st.id), {
-      kind: 'stroke',
-      payload: encodeStrokePayload(st),
-      updatedByUid: uid,
-      updatedByName: safeName,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+    initialWrites.push({
+      docId: sanitizeElementId(st.id, 'st'),
+      data: {
+        kind: 'stroke',
+        payload: encodeStrokePayload(st),
+        updatedByUid: uid,
+        updatedByName: safeName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      },
     });
   }
 
   try {
-    await batch2.commit();
+    for (let i = 0; i < initialWrites.length; i += 400) {
+      const chunk = initialWrites.slice(i, i + 400);
+      const batch2 = writeBatch(db);
+      for (const item of chunk) {
+        batch2.set(doc(elemCol, item.docId), item.data);
+      }
+      await batch2.commit();
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `collab_boards/${boardId}/elements`);
   }
@@ -709,6 +764,77 @@ export async function deleteWorkspaceBoard(uid: string, board: WorkspaceBoard) {
 }
 
 // --- Real-Time Board Elements Sync ---
+export interface CollabElementMeta {
+  docId: string;
+  hash: string;
+  existsOnServer: boolean;
+  canonical: boolean;
+  createdAtTs: Timestamp | null;
+}
+
+const CANONICAL_ELEMENT_KEYS = new Set([
+  'kind',
+  'payload',
+  'updatedByUid',
+  'updatedByName',
+  'createdAt',
+  'updatedAt',
+]);
+
+function isCanonicalElementDoc(data: Record<string, unknown>): boolean {
+  return (
+    data.createdAt instanceof Timestamp &&
+    typeof data.updatedByUid === 'string' &&
+    typeof data.updatedByName === 'string' &&
+    Object.keys(data).every((k) => CANONICAL_ELEMENT_KEYS.has(k))
+  );
+}
+
+export function buildCollabMetaFromGraph(graph: GraphDocument): Map<string, CollabElementMeta> {
+  const meta = new Map<string, CollabElementMeta>();
+  for (const n of graph.nodes) {
+    const payload = encodeNodePayload(n);
+    meta.set(n.id, {
+      docId: sanitizeElementId(n.id, 'n'),
+      hash: stableStringify({ kind: 'node', payload }),
+      existsOnServer: true,
+      canonical: true,
+      createdAtTs: null,
+    });
+  }
+  for (const e of graph.edges) {
+    const payload = encodeEdgePayload(e);
+    meta.set(e.id, {
+      docId: sanitizeElementId(e.id, 'e'),
+      hash: stableStringify({ kind: 'edge', payload }),
+      existsOnServer: true,
+      canonical: true,
+      createdAtTs: null,
+    });
+  }
+  for (const s of graph.stickies) {
+    const payload = encodeStickyPayload(s);
+    meta.set(s.id, {
+      docId: sanitizeElementId(s.id, 's'),
+      hash: stableStringify({ kind: 'sticky', payload }),
+      existsOnServer: true,
+      canonical: true,
+      createdAtTs: null,
+    });
+  }
+  for (const st of graph.strokes) {
+    const payload = encodeStrokePayload(st);
+    meta.set(st.id, {
+      docId: sanitizeElementId(st.id, 'st'),
+      hash: stableStringify({ kind: 'stroke', payload }),
+      existsOnServer: true,
+      canonical: true,
+      createdAtTs: null,
+    });
+  }
+  return meta;
+}
+
 export function subscribeCollabElements(
   boardId: string,
   onChange: (elements: {
@@ -716,7 +842,7 @@ export function subscribeCollabElements(
     edges: GraphEdge[];
     stickies: StickyNote[];
     strokes: FreehandStroke[];
-    rawHashes: Map<string, string>;
+    elementMeta: Map<string, CollabElementMeta>;
   }) => void
 ): Unsubscribe {
   const path = `collab_boards/${boardId}/elements`;
@@ -727,105 +853,253 @@ export function subscribeCollabElements(
       const edges: GraphEdge[] = [];
       const stickies: StickyNote[] = [];
       const strokes: FreehandStroke[] = [];
-      const rawHashes = new Map<string, string>();
+      const elementMeta = new Map<string, CollabElementMeta>();
 
       for (const d of snap.docs) {
         const data = d.data();
         const kind = String(data.kind ?? '');
         const payload = (data.payload as Record<string, unknown>) ?? {};
-        rawHashes.set(d.id, JSON.stringify({ kind, payload }));
-        if (kind === 'node') nodes.push(decodeNodePayload(d.id, payload));
-        else if (kind === 'edge') edges.push(decodeEdgePayload(d.id, payload));
-        else if (kind === 'sticky') stickies.push(decodeStickyPayload(d.id, payload));
-        else if (kind === 'stroke') strokes.push(decodeStrokePayload(d.id, payload));
+        const canonical = isCanonicalElementDoc(data);
+        const createdAtTs = data.createdAt instanceof Timestamp ? data.createdAt : null;
+
+        if (kind === 'node') {
+          const decoded = decodeNodePayload(d.id, payload);
+          nodes.push(decoded);
+          elementMeta.set(decoded.id, {
+            docId: d.id,
+            hash: stableStringify({ kind: 'node', payload: encodeNodePayload(decoded) }),
+            existsOnServer: true,
+            canonical,
+            createdAtTs,
+          });
+        } else if (kind === 'edge') {
+          const decoded = decodeEdgePayload(d.id, payload);
+          edges.push(decoded);
+          elementMeta.set(decoded.id, {
+            docId: d.id,
+            hash: stableStringify({ kind: 'edge', payload: encodeEdgePayload(decoded) }),
+            existsOnServer: true,
+            canonical,
+            createdAtTs,
+          });
+        } else if (kind === 'sticky') {
+          const decoded = decodeStickyPayload(d.id, payload);
+          stickies.push(decoded);
+          elementMeta.set(decoded.id, {
+            docId: d.id,
+            hash: stableStringify({ kind: 'sticky', payload: encodeStickyPayload(decoded) }),
+            existsOnServer: true,
+            canonical,
+            createdAtTs,
+          });
+        } else if (kind === 'stroke') {
+          const decoded = decodeStrokePayload(d.id, payload);
+          strokes.push(decoded);
+          elementMeta.set(decoded.id, {
+            docId: d.id,
+            hash: stableStringify({ kind: 'stroke', payload: encodeStrokePayload(decoded) }),
+            existsOnServer: true,
+            canonical,
+            createdAtTs,
+          });
+        }
       }
 
-      onChange({ nodes, edges, stickies, strokes, rawHashes });
+      onChange({ nodes, edges, stickies, strokes, elementMeta });
     },
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
 }
+
+type QueuedElementWrite =
+  | { kind: 'set'; docId: string; data: Record<string, unknown> }
+  | { kind: 'update'; docId: string; data: Record<string, unknown> }
+  | { kind: 'delete'; docId: string };
 
 export async function syncCollabElementDiff(
   boardId: string,
   uid: string,
   displayName: string,
   graph: GraphDocument,
-  lastSyncedHashes: Map<string, string>
-): Promise<Map<string, string>> {
+  lastSyncedMeta: Map<string, CollabElementMeta>
+): Promise<Map<string, CollabElementMeta>> {
   const path = `collab_boards/${boardId}/elements`;
   const elemCol = collection(db, path);
-  const safeName = (displayName || 'User').slice(0, 120);
+  const safeName = (displayName.trim() || 'User').slice(0, 120);
 
-  const nextMap = new Map<string, { kind: 'node' | 'edge' | 'sticky' | 'stroke'; payload: Record<string, unknown>; hash: string }>();
+  const nextEntries = new Map<
+    string,
+    { kind: 'node' | 'edge' | 'sticky' | 'stroke'; payload: Record<string, unknown>; hash: string }
+  >();
 
   for (const n of graph.nodes) {
     const payload = encodeNodePayload(n);
-    nextMap.set(n.id, { kind: 'node', payload, hash: JSON.stringify({ kind: 'node', payload }) });
+    nextEntries.set(n.id, { kind: 'node', payload, hash: stableStringify({ kind: 'node', payload }) });
   }
   for (const e of graph.edges) {
     const payload = encodeEdgePayload(e);
-    nextMap.set(e.id, { kind: 'edge', payload, hash: JSON.stringify({ kind: 'edge', payload }) });
+    nextEntries.set(e.id, { kind: 'edge', payload, hash: stableStringify({ kind: 'edge', payload }) });
   }
   for (const s of graph.stickies) {
     const payload = encodeStickyPayload(s);
-    nextMap.set(s.id, { kind: 'sticky', payload, hash: JSON.stringify({ kind: 'sticky', payload }) });
+    nextEntries.set(s.id, { kind: 'sticky', payload, hash: stableStringify({ kind: 'sticky', payload }) });
   }
   for (const st of graph.strokes) {
     const payload = encodeStrokePayload(st);
-    nextMap.set(st.id, { kind: 'stroke', payload, hash: JSON.stringify({ kind: 'stroke', payload }) });
+    nextEntries.set(st.id, { kind: 'stroke', payload, hash: stableStringify({ kind: 'stroke', payload }) });
   }
 
-  const batch = writeBatch(db);
-  let opCount = 0;
+  const nextMeta = new Map<string, CollabElementMeta>();
+  const ops: QueuedElementWrite[] = [];
+  const unknownEntries: { id: string; docId: string; entry: { kind: 'node' | 'edge' | 'sticky' | 'stroke'; payload: Record<string, unknown>; hash: string } }[] = [];
 
-  // Creates & updates
-  for (const [id, entry] of nextMap.entries()) {
-    const prevHash = lastSyncedHashes.get(id);
-    if (prevHash === entry.hash) continue;
-    const ref = doc(elemCol, id);
-    if (prevHash === undefined) {
-      batch.set(ref, {
-        kind: entry.kind,
-        payload: entry.payload,
-        updatedByUid: uid,
-        updatedByName: safeName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+  for (const [id, entry] of nextEntries.entries()) {
+    const prev = lastSyncedMeta.get(id);
+    if (prev && prev.hash === entry.hash) {
+      nextMeta.set(id, prev);
+      continue;
+    }
+
+    const docId = prev?.docId ?? sanitizeElementId(id, entry.kind);
+    if (!prev || !prev.existsOnServer) {
+      unknownEntries.push({ id, docId, entry });
+    } else if (prev.canonical) {
+      ops.push({
+        kind: 'update',
+        docId,
+        data: {
+          kind: entry.kind,
+          payload: entry.payload,
+          updatedByUid: uid,
+          updatedByName: safeName,
+          updatedAt: serverTimestamp(),
+        },
+      });
+      nextMeta.set(id, {
+        docId,
+        hash: entry.hash,
+        existsOnServer: true,
+        canonical: true,
+        createdAtTs: prev.createdAtTs,
       });
     } else {
-      batch.update(ref, {
-        kind: entry.kind,
-        payload: entry.payload,
-        updatedByUid: uid,
-        updatedByName: safeName,
-        updatedAt: serverTimestamp(),
+      ops.push({
+        kind: 'set',
+        docId,
+        data: {
+          kind: entry.kind,
+          payload: entry.payload,
+          updatedByUid: uid,
+          updatedByName: safeName,
+          createdAt: prev.createdAtTs ?? serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+      nextMeta.set(id, {
+        docId,
+        hash: entry.hash,
+        existsOnServer: true,
+        canonical: true,
+        createdAtTs: prev.createdAtTs,
       });
     }
-    opCount++;
+  }
+
+  if (unknownEntries.length > 0) {
+    try {
+      const snaps = await Promise.all(unknownEntries.map((u) => getDoc(doc(elemCol, u.docId))));
+      for (let i = 0; i < unknownEntries.length; i++) {
+        const { id, docId, entry } = unknownEntries[i];
+        const existingSnap = snaps[i];
+        if (!existingSnap.exists()) {
+          ops.push({
+            kind: 'set',
+            docId,
+            data: {
+              kind: entry.kind,
+              payload: entry.payload,
+              updatedByUid: uid,
+              updatedByName: safeName,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+          });
+          nextMeta.set(id, {
+            docId,
+            hash: entry.hash,
+            existsOnServer: true,
+            canonical: true,
+            createdAtTs: null,
+          });
+        } else {
+          const existingData = existingSnap.data();
+          const createdAtTs = existingData.createdAt instanceof Timestamp ? existingData.createdAt : null;
+          if (isCanonicalElementDoc(existingData)) {
+            ops.push({
+              kind: 'update',
+              docId,
+              data: {
+                kind: entry.kind,
+                payload: entry.payload,
+                updatedByUid: uid,
+                updatedByName: safeName,
+                updatedAt: serverTimestamp(),
+              },
+            });
+          } else {
+            ops.push({
+              kind: 'set',
+              docId,
+              data: {
+                kind: entry.kind,
+                payload: entry.payload,
+                updatedByUid: uid,
+                updatedByName: safeName,
+                createdAt: createdAtTs ?? serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              },
+            });
+          }
+          nextMeta.set(id, {
+            docId,
+            hash: entry.hash,
+            existsOnServer: true,
+            canonical: true,
+            createdAtTs,
+          });
+        }
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.GET, path);
+    }
   }
 
   // Deletes
-  for (const prevId of lastSyncedHashes.keys()) {
-    if (!nextMap.has(prevId)) {
-      batch.delete(doc(elemCol, prevId));
-      opCount++;
+  for (const [prevId, prevMeta] of lastSyncedMeta.entries()) {
+    if (!nextEntries.has(prevId) && prevMeta.existsOnServer) {
+      ops.push({ kind: 'delete', docId: prevMeta.docId });
     }
   }
 
-  if (opCount > 0) {
+  if (ops.length > 0) {
     try {
-      await batch.commit();
+      for (let i = 0; i < ops.length; i += 400) {
+        const chunk = ops.slice(i, i + 400);
+        const batch = writeBatch(db);
+        for (const op of chunk) {
+          const ref = doc(elemCol, op.docId);
+          if (op.kind === 'set') batch.set(ref, op.data);
+          else if (op.kind === 'update') batch.update(ref, op.data);
+          else batch.delete(ref);
+        }
+        await batch.commit();
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, path);
     }
   }
 
-  const updatedHashes = new Map<string, string>();
-  for (const [id, entry] of nextMap.entries()) {
-    updatedHashes.set(id, entry.hash);
-  }
-  return updatedHashes;
+  return nextMeta;
 }
 
 // --- Real-Time Presence ---

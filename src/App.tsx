@@ -14,6 +14,7 @@ import type {
   AppSection,
   BoardComment,
   CollabPresence,
+  FreehandStroke,
   GraphDocument,
   GraphEdge,
   GraphNode,
@@ -27,6 +28,8 @@ import type {
 import { auth, signInWithGoogle, signOutUser, testConnection } from './lib/firebase';
 import {
   addBoardComment,
+  buildCollabMetaFromGraph,
+  type CollabElementMeta,
   createCollabBoard,
   createPersonalBoard,
   deleteBoardComment,
@@ -145,7 +148,20 @@ function LinkDrawApp() {
   }, []);
 
   // Sync tracking refs
-  const lastCollabHashesRef = useRef<Map<string, string>>(new Map());
+  const lastCollabMetaRef = useRef<Map<string, CollabElementMeta>>(new Map());
+  const collabPendingCountRef = useRef(0);
+  const collabSyncQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeBoardIdRef = useRef<string | null>(activeBoardId);
+  activeBoardIdRef.current = activeBoardId;
+  const activeBoardSettingsRef = useRef<GraphDocument['settings']>({ ...DEFAULT_SETTINGS });
+  const latestCollabSnapshotRef = useRef<{
+    boardId: string;
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    stickies: StickyNote[];
+    strokes: FreehandStroke[];
+    elementMeta: Map<string, CollabElementMeta>;
+  } | null>(null);
   const personalSaveTimerRef = useRef<number | null>(null);
   const graphRef = useRef<GraphDocument>(graph);
   graphRef.current = graph;
@@ -206,6 +222,14 @@ function LinkDrawApp() {
     [allBoards, activeBoardId]
   );
 
+  if (activeBoard?.kind === 'shared') {
+    activeBoardSettingsRef.current = {
+      gridSnap: activeBoard.gridSnap,
+      gridSize: activeBoard.gridSize,
+      flowAnimation: activeBoard.flowAnimation,
+    };
+  }
+
   // Handle ?join=INVITE_CODE query parameter on boot
   useEffect(() => {
     if (!user) return;
@@ -215,6 +239,9 @@ function LinkDrawApp() {
       window.history.replaceState({}, '', window.location.pathname);
       joinCollabBoardByCode(code, user.uid, user.displayName || user.email || 'Collaborator')
         .then((boardId) => {
+          lastCollabMetaRef.current = new Map();
+          latestCollabSnapshotRef.current = null;
+          collabPendingCountRef.current = 0;
           setActiveBoardId(boardId);
           setSection('canvas');
           notify(`Joined shared board (${code.toUpperCase()}).`);
@@ -241,27 +268,37 @@ function LinkDrawApp() {
     }
 
     // Shared Live Board
+    const targetBoardId = activeBoard.id;
+    latestCollabSnapshotRef.current = null;
     const unsubElems = subscribeCollabElements(
-      activeBoard.id,
-      ({ nodes, edges, stickies, strokes, rawHashes }) => {
-        lastCollabHashesRef.current = rawHashes;
+      targetBoardId,
+      ({ nodes, edges, stickies, strokes, elementMeta }) => {
+        if (activeBoardIdRef.current !== targetBoardId) return;
+        if (collabPendingCountRef.current > 0) {
+          latestCollabSnapshotRef.current = {
+            boardId: targetBoardId,
+            nodes,
+            edges,
+            stickies,
+            strokes,
+            elementMeta,
+          };
+          return;
+        }
+        lastCollabMetaRef.current = elementMeta;
         setGraph((prev) => ({
           ...prev,
           nodes,
           edges,
           stickies,
           strokes,
-          settings: {
-            gridSnap: activeBoard.gridSnap,
-            gridSize: activeBoard.gridSize,
-            flowAnimation: activeBoard.flowAnimation,
-          },
+          settings: activeBoardSettingsRef.current,
         }));
       }
     );
 
-    const unsubPresence = subscribePresence(activeBoard.id, setPresence);
-    const unsubComments = subscribeBoardComments(activeBoard.id, setComments);
+    const unsubPresence = subscribePresence(targetBoardId, setPresence);
+    const unsubComments = subscribeBoardComments(targetBoardId, setComments);
 
     return () => {
       unsubElems();
@@ -273,13 +310,15 @@ function LinkDrawApp() {
   // Keep shared board settings synced when board metadata updates
   useEffect(() => {
     if (activeBoard?.kind === 'shared') {
+      const nextSettings = {
+        gridSnap: activeBoard.gridSnap,
+        gridSize: activeBoard.gridSize,
+        flowAnimation: activeBoard.flowAnimation,
+      };
+      activeBoardSettingsRef.current = nextSettings;
       setGraph((prev) => ({
         ...prev,
-        settings: {
-          gridSnap: activeBoard.gridSnap,
-          gridSize: activeBoard.gridSize,
-          flowAnimation: activeBoard.flowAnimation,
-        },
+        settings: nextSettings,
       }));
     }
   }, [activeBoard?.gridSnap, activeBoard?.gridSize, activeBoard?.flowAnimation, activeBoard?.kind]);
@@ -309,23 +348,61 @@ function LinkDrawApp() {
 
       if (!user || !activeBoard) return;
       if (activeBoard.kind === 'shared') {
+        const targetBoardId = activeBoard.id;
         const displayName = user.displayName || user.email || 'Collaborator';
-        syncCollabElementDiff(
-          activeBoard.id,
-          user.uid,
-          displayName,
-          nextGraph,
-          lastCollabHashesRef.current
-        ).then((hashes) => {
-          lastCollabHashesRef.current = hashes;
-        });
+        const graphSnapshot = nextGraph;
+        collabPendingCountRef.current += 1;
+
+        collabSyncQueueRef.current = collabSyncQueueRef.current
+          .catch(() => {})
+          .then(async () => {
+            if (activeBoardIdRef.current !== targetBoardId) return;
+            const updatedMeta = await syncCollabElementDiff(
+              targetBoardId,
+              user.uid,
+              displayName,
+              graphSnapshot,
+              lastCollabMetaRef.current
+            );
+            if (activeBoardIdRef.current === targetBoardId) {
+              lastCollabMetaRef.current = updatedMeta;
+            }
+          })
+          .catch((err) => {
+            const msg = err instanceof Error ? err.message : 'Unable to save board changes.';
+            notify(`Shared sync failed: ${msg}`);
+          })
+          .finally(() => {
+            collabPendingCountRef.current = Math.max(0, collabPendingCountRef.current - 1);
+            const deferred = latestCollabSnapshotRef.current;
+            if (
+              collabPendingCountRef.current === 0 &&
+              deferred &&
+              deferred.boardId === activeBoardIdRef.current
+            ) {
+              latestCollabSnapshotRef.current = null;
+              lastCollabMetaRef.current = deferred.elementMeta;
+              setGraph((curr) => ({
+                ...curr,
+                nodes: deferred.nodes,
+                edges: deferred.edges,
+                stickies: deferred.stickies,
+                strokes: deferred.strokes,
+                settings: activeBoardSettingsRef.current,
+              }));
+            }
+          });
 
         if (
           nextGraph.settings.gridSnap !== prev.settings.gridSnap ||
           nextGraph.settings.gridSize !== prev.settings.gridSize ||
           nextGraph.settings.flowAnimation !== prev.settings.flowAnimation
         ) {
-          updateCollabBoardSettings(activeBoard.id, nextGraph.settings);
+          activeBoardSettingsRef.current = { ...nextGraph.settings };
+          updateCollabBoardSettings(targetBoardId, nextGraph.settings).catch((err) => {
+            const msg = err instanceof Error ? err.message : 'Unable to save board settings.';
+            notify(`Settings sync failed: ${msg}`);
+          });
         }
       } else {
         if (personalSaveTimerRef.current) window.clearTimeout(personalSaveTimerRef.current);
@@ -333,11 +410,16 @@ function LinkDrawApp() {
         const targetTitle = activeBoard.title;
         const targetDesc = activeBoard.description;
         personalSaveTimerRef.current = window.setTimeout(() => {
-          savePersonalBoardGraph(user.uid, targetBoardId, targetTitle, targetDesc, nextGraph);
+          savePersonalBoardGraph(user.uid, targetBoardId, targetTitle, targetDesc, nextGraph).catch(
+            (err) => {
+              const msg = err instanceof Error ? err.message : 'Unable to save board.';
+              notify(`Save failed: ${msg}`);
+            }
+          );
         }, 350);
       }
     },
-    [user, activeBoard]
+    [user, activeBoard, notify]
   );
 
   const handleUndo = useCallback(() => {
@@ -365,11 +447,18 @@ function LinkDrawApp() {
     setSelectedStickyId(null);
     setHighlightedNodeIds(new Set());
     setHighlightedEdgeIds(new Set());
-    lastCollabHashesRef.current = new Map();
+    lastCollabMetaRef.current = new Map();
+    latestCollabSnapshotRef.current = null;
+    collabPendingCountRef.current = 0;
     setActiveBoardId(board.id);
     if (board.kind === 'personal' && board.graphData) {
       setGraph(board.graphData);
     } else {
+      activeBoardSettingsRef.current = {
+        gridSnap: board.gridSnap,
+        gridSize: board.gridSize,
+        flowAnimation: board.flowAnimation,
+      };
       setGraph(EMPTY_GRAPH);
     }
     setSection('canvas');
@@ -390,7 +479,14 @@ function LinkDrawApp() {
       : await createPersonalBoard(user.uid, opts.title, opts.description, initialGraph);
     setUndoStack([]);
     setRedoStack([]);
-    lastCollabHashesRef.current = new Map();
+    latestCollabSnapshotRef.current = null;
+    collabPendingCountRef.current = 0;
+    lastCollabMetaRef.current = opts.shared
+      ? buildCollabMetaFromGraph(initialGraph)
+      : new Map();
+    if (opts.shared) {
+      activeBoardSettingsRef.current = { ...initialGraph.settings };
+    }
     setActiveBoardId(created.id);
     setGraph(initialGraph);
     setSection('canvas');
@@ -408,6 +504,9 @@ function LinkDrawApp() {
       user.uid,
       user.displayName || user.email || 'Collaborator'
     );
+    lastCollabMetaRef.current = new Map();
+    latestCollabSnapshotRef.current = null;
+    collabPendingCountRef.current = 0;
     setActiveBoardId(boardId);
     setSection('canvas');
     notify(`Joined shared board (${code}).`);
@@ -427,20 +526,23 @@ function LinkDrawApp() {
 
   const handlePromoteToShared = async (board: WorkspaceBoard) => {
     if (!user) return;
-    const sourceGraph = board.graphData ?? EMPTY_GRAPH;
+    const sourceGraph = cloneGraph(board.graphData ?? EMPTY_GRAPH);
     const displayName = user.displayName || user.email || 'User';
     const created = await createCollabBoard(
       user.uid,
       displayName,
       board.title,
       board.description,
-      cloneGraph(sourceGraph)
+      sourceGraph
     );
     setUndoStack([]);
     setRedoStack([]);
-    lastCollabHashesRef.current = new Map();
+    latestCollabSnapshotRef.current = null;
+    collabPendingCountRef.current = 0;
+    lastCollabMetaRef.current = buildCollabMetaFromGraph(sourceGraph);
+    activeBoardSettingsRef.current = { ...sourceGraph.settings };
     setActiveBoardId(created.id);
-    setGraph(cloneGraph(sourceGraph));
+    setGraph(sourceGraph);
     setSection('canvas');
     notify(
       created.inviteCode

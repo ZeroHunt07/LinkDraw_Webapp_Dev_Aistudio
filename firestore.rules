@@ -236,6 +236,34 @@ service cloud.firestore {
         ]);
     }
 
+    // --- Board Element Action Helpers ---
+    function isElementStandardUpdate() {
+      return ('createdAt' in existing())
+        && existing().createdAt is timestamp
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'kind', 'payload', 'updatedByUid', 'updatedByName', 'updatedAt'
+        ]);
+    }
+
+    function isElementLegacyMigrationUpdate() {
+      return (
+          !('createdAt' in existing())
+          || !(existing().createdAt is timestamp)
+          || !existing().keys().hasOnly([
+            'kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt'
+          ])
+        )
+        && (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt)
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt',
+          'updated_by_uid', 'updated_by_name', 'created_at', 'updated_at',
+          'id', 'boardId', 'board_id', 'elementId', 'element_id',
+          'version', 'deviceId', 'device_id', 'clientId', 'client_id',
+          'deleted', 'deletedAt', 'deleted_at'
+        ]);
+    }
+
     // --- Collection Rules ---
     match /collab_boards/{boardId} {
       allow get: if isVerifiedUser() && isValidId(boardId) && (request.auth.uid in existing().memberUids);
@@ -273,9 +301,8 @@ service cloud.firestore {
           && isValidId(elementId)
           && isValidBoardElement(incoming())
           && incoming().updatedByUid == request.auth.uid
-          && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
-          && incoming().diff(existing()).affectedKeys().hasOnly(['kind', 'payload', 'updatedByUid', 'updatedByName', 'updatedAt'])
+          && (isElementStandardUpdate() || isElementLegacyMigrationUpdate())
           && isBoardMember(boardId);
         allow delete: if isVerifiedUser() && isValidId(boardId) && isValidId(elementId) && isBoardMember(boardId);
       }
