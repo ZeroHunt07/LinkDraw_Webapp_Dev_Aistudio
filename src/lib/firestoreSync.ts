@@ -965,10 +965,61 @@ export async function deleteBoardComment(boardId: string, commentId: string) {
   }
 }
 
+const VALID_NOTE_TYPES = new Set<NoteRecord['noteType']>([
+  'Observation',
+  'Source',
+  'Lead',
+  'Analysis',
+  'Question',
+  'Action',
+]);
+
+const VALID_NOTE_PRIORITIES = new Set<NoteRecord['priority']>([
+  'urgent',
+  'high',
+  'normal',
+  'low',
+]);
+
+function normalizeNoteType(raw: unknown): NoteRecord['noteType'] {
+  const s = String(raw ?? '').trim();
+  for (const valid of VALID_NOTE_TYPES) {
+    if (valid.toLowerCase() === s.toLowerCase()) return valid;
+  }
+  return 'Observation';
+}
+
+function normalizeNotePriority(raw: unknown): NoteRecord['priority'] {
+  const s = String(raw ?? '').trim().toLowerCase() as NoteRecord['priority'];
+  return VALID_NOTE_PRIORITIES.has(s) ? s : 'normal';
+}
+
+function normalizeNoteColor(raw: unknown): string {
+  const s = String(raw ?? '').trim();
+  if (s.length >= 4 && s.length <= 16) return s;
+  return '#ffffff';
+}
+
+function sanitizeChecklist(raw: unknown): { text: string; checked: boolean }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { text: string; checked: boolean }[] = [];
+  for (const item of raw.slice(0, 100)) {
+    if (!item || typeof item !== 'object') continue;
+    const text = String((item as { text?: unknown }).text ?? '').trim().slice(0, 300);
+    if (!text) continue;
+    out.push({
+      text,
+      checked: Boolean((item as { checked?: unknown }).checked),
+    });
+  }
+  return out;
+}
+
 // --- Notes Studio CRUD ---
 export function subscribeUserNotes(
   uid: string,
-  onChange: (notes: NoteRecord[]) => void
+  onChange: (notes: NoteRecord[]) => void,
+  onError?: (err: unknown) => void
 ): Unsubscribe {
   const path = `users/${uid}/notes`;
   return onSnapshot(
@@ -977,18 +1028,24 @@ export function subscribeUserNotes(
       const notes: NoteRecord[] = snap.docs
         .map((d) => {
           const data = d.data();
+          const rawTags = Array.isArray(data.tags) ? data.tags : [];
+          const cleanTags = rawTags
+            .map((t) => String(t ?? '').trim())
+            .filter(Boolean)
+            .slice(0, 20);
+          const rawWordCount = Number(data.wordCount ?? data.word_count ?? 0);
           return {
             id: d.id,
             ownerId: String(data.ownerId ?? data.owner_id ?? uid),
             boardId: data.boardId ? String(data.boardId) : data.board_id ? String(data.board_id) : null,
             title: String(data.title ?? 'Untitled Note'),
             body: String(data.body ?? ''),
-            noteType: ((data.noteType ?? data.note_type) as NoteRecord['noteType']) ?? 'Observation',
+            noteType: normalizeNoteType(data.noteType ?? data.note_type),
             sourceUrl: String(data.sourceUrl ?? data.source_url ?? ''),
             folder: String(data.folder ?? ''),
-            tags: Array.isArray(data.tags) ? data.tags.map(String) : [],
-            priority: (data.priority as NoteRecord['priority']) ?? 'normal',
-            color: String(data.color ?? '#ffffff'),
+            tags: cleanTags,
+            priority: normalizeNotePriority(data.priority),
+            color: normalizeNoteColor(data.color),
             pinned: Boolean(data.pinned),
             archived: Boolean(data.archived),
             linkedNodeId: data.linkedNodeId
@@ -1001,13 +1058,8 @@ export function subscribeUserNotes(
               : data.linked_node_name
               ? String(data.linked_node_name)
               : null,
-            checklist: Array.isArray(data.checklist)
-              ? data.checklist.map((item) => ({
-                  text: String((item as { text?: string }).text ?? ''),
-                  checked: Boolean((item as { checked?: boolean }).checked),
-                }))
-              : [],
-            wordCount: Number(data.wordCount ?? data.word_count ?? 0),
+            checklist: sanitizeChecklist(data.checklist),
+            wordCount: Number.isFinite(rawWordCount) ? Math.max(0, Math.min(100000, Math.round(rawWordCount))) : 0,
             createdAt: toMillis(data.createdAt ?? data.created_at),
             updatedAt: toMillis(data.updatedAt ?? data.updated_at),
           };
@@ -1015,40 +1067,63 @@ export function subscribeUserNotes(
         .sort((a, b) => b.updatedAt - a.updatedAt);
       onChange(notes);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      if (onError) onError(err);
+      else handleFirestoreError(err, OperationType.LIST, path);
+    }
   );
 }
 
-export async function saveUserNote(uid: string, note: NoteRecord, isNew: boolean): Promise<void> {
-  const path = `users/${uid}/notes/${note.id}`;
-  const cleanPayload = {
-    ownerId: uid,
-    boardId: note.boardId ?? null,
-    title: (note.title.trim() || 'Untitled Note').slice(0, 200),
-    body: note.body.slice(0, 50000),
-    noteType: note.noteType,
-    sourceUrl: note.sourceUrl.slice(0, 1000),
-    folder: note.folder.slice(0, 100),
-    tags: note.tags.slice(0, 20),
-    priority: note.priority,
-    color: note.color.slice(0, 16),
+export async function saveUserNote(uid: string, note: NoteRecord, _isNew?: boolean): Promise<void> {
+  const safeNoteId = note.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || makeSafeId('note');
+  const path = `users/${uid}/notes/${safeNoteId}`;
+  const docRef = doc(db, path);
+  const cleanBody = String(note.body ?? '').slice(0, 50000);
+  const computedWords = cleanBody.trim() ? cleanBody.trim().split(/\s+/).length : 0;
+  const wordCount = Math.max(
+    0,
+    Math.min(100000, Number.isFinite(note.wordCount) ? Math.round(note.wordCount) : computedWords)
+  );
+  const cleanTags = (note.tags ?? [])
+    .map((t) => String(t ?? '').trim().slice(0, 60))
+    .filter(Boolean)
+    .slice(0, 20);
+
+  const mutableFields = {
+    boardId: note.boardId ? String(note.boardId).slice(0, 128) : null,
+    title: (String(note.title ?? '').trim() || 'Untitled Note').slice(0, 200),
+    body: cleanBody,
+    noteType: normalizeNoteType(note.noteType),
+    sourceUrl: String(note.sourceUrl ?? '').slice(0, 1000),
+    folder: String(note.folder ?? '').slice(0, 100),
+    tags: cleanTags,
+    priority: normalizeNotePriority(note.priority),
+    color: normalizeNoteColor(note.color),
     pinned: Boolean(note.pinned),
     archived: Boolean(note.archived),
-    linkedNodeId: note.linkedNodeId ?? null,
-    linkedNodeName: note.linkedNodeName ? note.linkedNodeName.slice(0, 200) : null,
-    checklist: note.checklist.slice(0, 100).map((c) => ({ text: c.text.slice(0, 300), checked: Boolean(c.checked) })),
-    wordCount: Math.max(0, Math.min(100000, note.wordCount)),
+    linkedNodeId: note.linkedNodeId ? String(note.linkedNodeId).slice(0, 128) : null,
+    linkedNodeName: note.linkedNodeName ? String(note.linkedNodeName).slice(0, 200) : null,
+    checklist: sanitizeChecklist(note.checklist),
+    wordCount,
     updatedAt: serverTimestamp(),
   };
 
+  let opType: OperationType = OperationType.WRITE;
   try {
-    if (isNew) {
-      await setDoc(doc(db, path), { ...cleanPayload, createdAt: serverTimestamp() });
+    const existingSnap = await getDoc(docRef);
+    if (!existingSnap.exists()) {
+      opType = OperationType.CREATE;
+      await setDoc(docRef, {
+        ownerId: uid,
+        ...mutableFields,
+        createdAt: serverTimestamp(),
+      });
     } else {
-      await updateDoc(doc(db, path), cleanPayload);
+      opType = OperationType.UPDATE;
+      await updateDoc(docRef, mutableFields);
     }
   } catch (err) {
-    handleFirestoreError(err, isNew ? OperationType.CREATE : OperationType.UPDATE, path);
+    handleFirestoreError(err, opType, path);
   }
 }
 

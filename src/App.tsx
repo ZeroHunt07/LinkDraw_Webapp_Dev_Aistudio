@@ -128,7 +128,21 @@ function LinkDrawApp() {
   const [notesTargetNodeId, setNotesTargetNodeId] = useState<string | null>(null);
 
   const [toast, setToast] = useState<string | null>(null);
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
   const toastTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const onOnline = () => setIsOnline(true);
+    const onOffline = () => setIsOnline(false);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('offline', onOffline);
+    return () => {
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('offline', onOffline);
+    };
+  }, []);
 
   // Sync tracking refs
   const lastCollabHashesRef = useRef<Map<string, string>>(new Map());
@@ -735,16 +749,21 @@ function LinkDrawApp() {
             nodes={graph.nodes}
             notes={notes}
             initialSelectedNodeId={notesTargetNodeId}
-            onSaveNote={async (note, isNew) => {
+            onSaveNote={async (note, isNew, silent) => {
               await saveUserNote(user.uid, note, isNew);
-              notify('Note saved.');
+              if (!silent) {
+                notify('Note saved & synced.');
+              }
             }}
             onDeleteNote={async (noteId) => {
               await deleteUserNote(user.uid, noteId);
               notify('Note deleted.');
             }}
-            onJumpToNode={(nodeId) => focusNodeOrEdgeOnCanvas(nodeId, 'node')}
-            onCreateNodeFromNote={(note) => {
+            onJumpToNode={(nodeId) => {
+              setNotesTargetNodeId(null);
+              focusNodeOrEdgeOnCanvas(nodeId, 'node');
+            }}
+            onCreateNodeFromNote={async (note) => {
               if (!activeBoard) {
                 notify('Open a workspace first to spawn a node on its canvas.');
                 return;
@@ -769,14 +788,19 @@ function LinkDrawApp() {
               };
               const nextGraph = { ...graph, nodes: [...graph.nodes, newNode] };
               commitGraph(nextGraph, true);
-              const noteExists = notes.some((existing) => existing.id === note.id);
-              saveUserNote(
-                user.uid,
-                { ...note, linkedNodeId: newNode.id, linkedNodeName: newNode.text },
-                !noteExists
-              );
-              focusNodeOrEdgeOnCanvas(newNode.id, 'node');
-              notify(`Created node "${newNode.text}" from note.`);
+              try {
+                const noteExists = notes.some((existing) => existing.id === note.id);
+                await saveUserNote(
+                  user.uid,
+                  { ...note, linkedNodeId: newNode.id, linkedNodeName: newNode.text },
+                  !noteExists
+                );
+                setNotesTargetNodeId(null);
+                focusNodeOrEdgeOnCanvas(newNode.id, 'node');
+                notify(`Created node "${newNode.text}" from note.`);
+              } catch {
+                notify('Node created, but linking note failed to sync.');
+              }
             }}
           />
         )}
@@ -983,6 +1007,14 @@ function LinkDrawApp() {
           onNotify={notify}
           onClose={() => setShowCollaboratorsModal(false)}
         />
+      )}
+
+      {/* Offline Mode Indicator */}
+      {!isOnline && (
+        <div className="fixed bottom-16 md:bottom-4 left-4 z-[65] flex items-center gap-2 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-lg">
+          <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
+          Offline Mode — Cached app loaded. Cloud sync will resume online.
+        </div>
       )}
 
       {/* Toast Notification */}

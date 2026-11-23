@@ -56,6 +56,7 @@ import {
 } from '../lib/exportEngine';
 import { makeSafeId } from '../lib/firestoreSync';
 import { firebaseProjectId, firestoreDatabaseId } from '../lib/firebase';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface UtilitiesSuiteProps {
   activeSubTab: UtilitySubTab;
@@ -1034,6 +1035,12 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
                         </button>
                       </div>
                     ))}
+                  </div>
+                  <div className="pt-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Install LinkDraw as a PWA (or wrap in an Android TWA) so mobile always shares 100% of Web features with zero separate APK updates.
+                    </span>
+                    <PWAInstallButton />
                   </div>
                 </div>
               </div>

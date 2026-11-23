@@ -17,6 +17,7 @@ import {
 import type { GraphDocument, StarterTemplateId, WorkspaceBoard } from '../types/linkdraw';
 import { exportLinkDrawJSON, parseLinkDrawJSON, triggerFileDownload } from '../lib/exportEngine';
 import { fetchCollabBoardGraph } from '../lib/firestoreSync';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface WorkspacesHomeProps {
   uid: string;
@@ -202,6 +203,7 @@ export const WorkspacesHome: React.FC<WorkspacesHomeProps> = ({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <PWAInstallButton compact />
             <button
               onClick={() => {
                 setJoinError('');

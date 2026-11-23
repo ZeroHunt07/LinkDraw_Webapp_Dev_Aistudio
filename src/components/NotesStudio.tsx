@@ -1,10 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   Archive,
+  ArrowLeft,
+  Check,
   CheckSquare,
+  Cloud,
   Crosshair,
   Folder,
   Link2,
+  Loader2,
   Pin,
   Plus,
   Search,
@@ -26,11 +31,13 @@ interface NotesStudioProps {
   nodes: GraphNode[];
   notes: NoteRecord[];
   initialSelectedNodeId: string | null;
-  onSaveNote: (note: NoteRecord, isNew: boolean) => Promise<void>;
+  onSaveNote: (note: NoteRecord, isNew: boolean, silent?: boolean) => Promise<void>;
   onDeleteNote: (noteId: string) => Promise<void>;
   onJumpToNode: (nodeId: string) => void;
-  onCreateNodeFromNote: (note: NoteRecord) => void;
+  onCreateNodeFromNote: (note: NoteRecord) => Promise<void> | void;
 }
+
+type SyncState = 'idle' | 'dirty' | 'saving' | 'saved' | 'error';
 
 const NOTE_TYPES: NoteType[] = ['Observation', 'Source', 'Lead', 'Analysis', 'Question', 'Action'];
 const PRIORITIES: { value: NotePriority; label: string; ribbon: string }[] = [
@@ -39,6 +46,59 @@ const PRIORITIES: { value: NotePriority; label: string; ribbon: string }[] = [
   { value: 'normal', label: 'Normal', ribbon: 'bg-slate-400' },
   { value: 'low', label: 'Low', ribbon: 'bg-sky-500' },
 ];
+
+function computeWords(txt: string): number {
+  return txt.trim() ? txt.trim().split(/\s+/).length : 0;
+}
+
+function parseTags(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function formatSyncError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  try {
+    const parsed = JSON.parse(raw) as { error?: string };
+    if (parsed && typeof parsed.error === 'string') {
+      return parsed.error;
+    }
+  } catch {
+    // Plain error string
+  }
+  return raw || 'Unable to sync note to cloud.';
+}
+
+function notesDiffer(a: NoteRecord, b: NoteRecord): boolean {
+  if (
+    a.title !== b.title ||
+    a.body !== b.body ||
+    a.noteType !== b.noteType ||
+    a.priority !== b.priority ||
+    a.folder !== b.folder ||
+    a.sourceUrl !== b.sourceUrl ||
+    a.pinned !== b.pinned ||
+    a.archived !== b.archived ||
+    a.linkedNodeId !== b.linkedNodeId ||
+    a.linkedNodeName !== b.linkedNodeName ||
+    a.color !== b.color
+  ) {
+    return true;
+  }
+  if (a.tags.length !== b.tags.length || a.tags.some((t, i) => t !== b.tags[i])) {
+    return true;
+  }
+  if (
+    a.checklist.length !== b.checklist.length ||
+    a.checklist.some((c, i) => c.text !== b.checklist[i].text || c.checked !== b.checklist[i].checked)
+  ) {
+    return true;
+  }
+  return false;
+}
 
 export const NotesStudio: React.FC<NotesStudioProps> = ({
   uid,
@@ -58,21 +118,247 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
   const [isNewDraft, setIsNewDraft] = useState(false);
   const [tagsText, setTagsText] = useState('');
   const [newCheckText, setNewCheckText] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [syncState, setSyncState] = useState<SyncState>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Refs for race-free auto-save & unmount flush
+  const draftRef = useRef<NoteRecord | null>(null);
+  const tagsTextRef = useRef('');
+  const isNewDraftRef = useRef(false);
+  const dirtyRef = useRef(false);
+  const inFlightRef = useRef(false);
+  const queuedSaveRef = useRef(false);
+  const autoSaveTimerRef = useRef<number | null>(null);
+  const onSaveNoteRef = useRef(onSaveNote);
+  const mountedRef = useRef(true);
+  const lastHandledNodeIdRef = useRef<string | null>(null);
+
+  draftRef.current = draft;
+  tagsTextRef.current = tagsText;
+  isNewDraftRef.current = isNewDraft;
+  onSaveNoteRef.current = onSaveNote;
+
+  const clearAutoSaveTimer = useCallback(() => {
+    if (autoSaveTimerRef.current !== null) {
+      window.clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+  }, []);
+
+  const persistNote = useCallback(
+    async (
+      targetDraft: NoteRecord,
+      targetTagsText: string,
+      wasNew: boolean,
+      silent = true
+    ): Promise<boolean> => {
+      if (inFlightRef.current) {
+        queuedSaveRef.current = true;
+        return false;
+      }
+
+      inFlightRef.current = true;
+      queuedSaveRef.current = false;
+      if (mountedRef.current) {
+        setSyncState('saving');
+        setSaveError(null);
+      }
+
+      const payload: NoteRecord = {
+        ...targetDraft,
+        tags: parseTags(targetTagsText),
+        wordCount: computeWords(targetDraft.body),
+        updatedAt: Date.now(),
+      };
+
+      try {
+        await onSaveNoteRef.current(payload, wasNew, silent);
+        dirtyRef.current = false;
+        if (mountedRef.current) {
+          setIsNewDraft(false);
+          // Only update draft metadata if still on same note without newer queued edits
+          if (draftRef.current?.id === payload.id && !queuedSaveRef.current) {
+            setSyncState('saved');
+          }
+        }
+        return true;
+      } catch (err) {
+        if (mountedRef.current) {
+          setSyncState('error');
+          setSaveError(formatSyncError(err));
+        }
+        return false;
+      } finally {
+        inFlightRef.current = false;
+        if (queuedSaveRef.current && draftRef.current) {
+          queuedSaveRef.current = false;
+          void persistNote(
+            draftRef.current,
+            tagsTextRef.current,
+            isNewDraftRef.current,
+            true
+          );
+        }
+      }
+    },
+    []
+  );
+
+  const flushPendingSave = useCallback(
+    async (silent = true) => {
+      clearAutoSaveTimer();
+      if (dirtyRef.current && draftRef.current) {
+        await persistNote(draftRef.current, tagsTextRef.current, isNewDraftRef.current, silent);
+      }
+    },
+    [clearAutoSaveTimer, persistNote]
+  );
+
+  const scheduleAutoSave = useCallback(() => {
+    clearAutoSaveTimer();
+    dirtyRef.current = true;
+    setSyncState('dirty');
+    setSaveError(null);
+    autoSaveTimerRef.current = window.setTimeout(() => {
+      autoSaveTimerRef.current = null;
+      if (draftRef.current && dirtyRef.current) {
+        void persistNote(draftRef.current, tagsTextRef.current, isNewDraftRef.current, true);
+      }
+    }, 650);
+  }, [clearAutoSaveTimer, persistNote]);
+
+  // Flush unsaved draft when component unmounts (e.g., switching to Canvas / Workspaces)
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearAutoSaveTimer();
+      if (dirtyRef.current && draftRef.current) {
+        const snapshot: NoteRecord = {
+          ...draftRef.current,
+          tags: parseTags(tagsTextRef.current),
+          wordCount: computeWords(draftRef.current.body),
+          updatedAt: Date.now(),
+        };
+        void onSaveNoteRef.current(snapshot, isNewDraftRef.current, true).catch(() => {});
+      }
+    };
+  }, [clearAutoSaveTimer]);
+
+  const selectExistingNote = useCallback(
+    (note: NoteRecord) => {
+      if (draftRef.current && draftRef.current.id !== note.id && dirtyRef.current) {
+        void flushPendingSave(true);
+      } else {
+        clearAutoSaveTimer();
+      }
+      dirtyRef.current = false;
+      setSelectedNoteId(note.id);
+      setDraft({
+        ...note,
+        tags: [...note.tags],
+        checklist: note.checklist.map((c) => ({ ...c })),
+      });
+      setTagsText(note.tags.join(', '));
+      setIsNewDraft(false);
+      setSyncState('saved');
+      setSaveError(null);
+    },
+    [clearAutoSaveTimer, flushPendingSave]
+  );
+
+  const startNewNote = useCallback(
+    (linkedNode?: GraphNode) => {
+      if (draftRef.current && dirtyRef.current) {
+        void flushPendingSave(true);
+      } else {
+        clearAutoSaveTimer();
+      }
+      const now = Date.now();
+      const blank: NoteRecord = {
+        id: makeSafeId('note'),
+        ownerId: uid,
+        boardId,
+        title: linkedNode ? `${linkedNode.text} — Field Notes` : 'Untitled Note',
+        body: linkedNode ? `## ${linkedNode.text}\n\nSummary and observations:\n- ` : '',
+        noteType: 'Observation',
+        sourceUrl: '',
+        folder: folderFilter.startsWith('__') ? '' : folderFilter,
+        tags: linkedNode ? [...linkedNode.tags] : [],
+        priority: 'normal',
+        color: '#ffffff',
+        pinned: false,
+        archived: false,
+        linkedNodeId: linkedNode?.id ?? null,
+        linkedNodeName: linkedNode?.text ?? null,
+        checklist: [],
+        wordCount: linkedNode ? computeWords(`## ${linkedNode.text}\n\nSummary and observations:\n- `) : 0,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const initialTags = blank.tags.join(', ');
+      setSelectedNoteId(blank.id);
+      setDraft(blank);
+      setTagsText(initialTags);
+      setIsNewDraft(true);
+      setSaveError(null);
+      if (linkedNode) {
+        // Persist node-linked note immediately so cross-navigation always preserves it
+        dirtyRef.current = true;
+        void persistNote(blank, initialTags, true, true);
+      } else {
+        dirtyRef.current = false;
+        setSyncState('idle');
+      }
+    },
+    [boardId, clearAutoSaveTimer, flushPendingSave, folderFilter, persistNote, uid]
+  );
 
   // Sync if launched from Node Inspector for a specific node
   useEffect(() => {
-    if (!initialSelectedNodeId) return;
+    if (!initialSelectedNodeId) {
+      lastHandledNodeIdRef.current = null;
+      return;
+    }
+    if (lastHandledNodeIdRef.current === initialSelectedNodeId) return;
     const existing = notes.find((n) => n.linkedNodeId === initialSelectedNodeId);
     if (existing) {
+      lastHandledNodeIdRef.current = initialSelectedNodeId;
       selectExistingNote(existing);
     } else {
       const targetNode = nodes.find((n) => n.id === initialSelectedNodeId);
       if (targetNode) {
+        lastHandledNodeIdRef.current = initialSelectedNodeId;
         startNewNote(targetNode);
       }
     }
-  }, [initialSelectedNodeId]);
+  }, [initialSelectedNodeId, nodes, notes, selectExistingNote, startNewNote]);
+
+  // Two-way live sync: update open draft from Firestore when not locally dirty or saving
+  useEffect(() => {
+    if (!selectedNoteId) return;
+    const remote = notes.find((n) => n.id === selectedNoteId);
+    if (!remote) {
+      if (!isNewDraft && !dirtyRef.current && !inFlightRef.current) {
+        setDraft(null);
+        setSelectedNoteId(null);
+        setSyncState('idle');
+      }
+      return;
+    }
+    if (isNewDraft) {
+      setIsNewDraft(false);
+    }
+    if (!dirtyRef.current && !inFlightRef.current && draftRef.current && notesDiffer(draftRef.current, remote)) {
+      setDraft({
+        ...remote,
+        tags: [...remote.tags],
+        checklist: remote.checklist.map((c) => ({ ...c })),
+      });
+      setTagsText(remote.tags.join(', '));
+      setSyncState('saved');
+    }
+  }, [notes, selectedNoteId, isNewDraft]);
 
   const customFolders = useMemo(() => {
     const set = new Set<string>();
@@ -112,95 +398,74 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       });
   }, [notes, folderFilter, search]);
 
-  const selectExistingNote = (note: NoteRecord) => {
-    setSelectedNoteId(note.id);
-    setDraft({
-      ...note,
-      tags: [...note.tags],
-      checklist: note.checklist.map((c) => ({ ...c })),
+  const updateDraftAndAutoSave = (updater: (prev: NoteRecord) => NoteRecord, immediate = false) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const next = updater(prev);
+      draftRef.current = next;
+      if (immediate) {
+        clearAutoSaveTimer();
+        dirtyRef.current = true;
+        void persistNote(next, tagsTextRef.current, isNewDraftRef.current, true);
+      } else {
+        scheduleAutoSave();
+      }
+      return next;
     });
-    setTagsText(note.tags.join(', '));
-    setIsNewDraft(false);
   };
 
-  const startNewNote = (linkedNode?: GraphNode) => {
-    const now = Date.now();
-    const blank: NoteRecord = {
-      id: makeSafeId('note'),
-      ownerId: uid,
-      boardId,
-      title: linkedNode ? `${linkedNode.text} — Field Notes` : 'Untitled Note',
-      body: linkedNode ? `## ${linkedNode.text}\n\nSummary and observations:\n- ` : '',
-      noteType: 'Observation',
-      sourceUrl: '',
-      folder: folderFilter.startsWith('__') ? '' : folderFilter,
-      tags: linkedNode ? [...linkedNode.tags] : [],
-      priority: 'normal',
-      color: '#ffffff',
-      pinned: false,
-      archived: false,
-      linkedNodeId: linkedNode?.id ?? null,
-      linkedNodeName: linkedNode?.text ?? null,
-      checklist: [],
-      wordCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    };
-    setSelectedNoteId(blank.id);
-    setDraft(blank);
-    setTagsText(blank.tags.join(', '));
-    setIsNewDraft(true);
-  };
-
-  const computeWords = (txt: string) =>
-    txt.trim() ? txt.trim().split(/\s+/).length : 0;
-
-  const handleSave = async () => {
-    if (!draft || saving) return;
-    setSaving(true);
-    try {
-      const parsedTags = tagsText
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean);
-      const nextNote: NoteRecord = {
-        ...draft,
-        tags: parsedTags,
-        wordCount: computeWords(draft.body),
-        updatedAt: Date.now(),
-      };
-      await onSaveNote(nextNote, isNewDraft);
-      setIsNewDraft(false);
-      setDraft(nextNote);
-    } finally {
-      setSaving(false);
-    }
+  const handleManualSave = async () => {
+    if (!draftRef.current) return;
+    clearAutoSaveTimer();
+    await persistNote(draftRef.current, tagsTextRef.current, isNewDraftRef.current, false);
   };
 
   const insertFormat = (snippet: string) => {
-    if (!draft) return;
-    setDraft({
-      ...draft,
-      body: draft.body ? `${draft.body}\n${snippet}` : snippet,
-    });
+    updateDraftAndAutoSave((prev) => ({
+      ...prev,
+      body: prev.body ? `${prev.body}\n${snippet}` : snippet,
+    }));
   };
 
   const addChecklistItem = () => {
     if (!draft || !newCheckText.trim()) return;
-    const item: ChecklistItem = { text: newCheckText.trim(), checked: false };
-    setDraft({ ...draft, checklist: [...draft.checklist, item] });
+    const item: ChecklistItem = { text: newCheckText.trim().slice(0, 300), checked: false };
     setNewCheckText('');
+    updateDraftAndAutoSave(
+      (prev) => ({ ...prev, checklist: [...prev.checklist, item] }),
+      true
+    );
   };
 
   const toggleQuickPin = async (note: NoteRecord) => {
-    await onSaveNote({ ...note, pinned: !note.pinned, updatedAt: Date.now() }, false);
-    if (draft?.id === note.id) setDraft({ ...draft, pinned: !note.pinned });
+    const updated = { ...note, pinned: !note.pinned, updatedAt: Date.now() };
+    if (draft?.id === note.id) {
+      updateDraftAndAutoSave((prev) => ({ ...prev, pinned: !prev.pinned }), true);
+    } else {
+      try {
+        await onSaveNote(updated, false, true);
+      } catch (err) {
+        setSaveError(formatSyncError(err));
+      }
+    }
+  };
+
+  const handleBackToListMobile = async () => {
+    await flushPendingSave(true);
+    setDraft(null);
+    setSelectedNoteId(null);
+    setSyncState('idle');
+    setSaveError(null);
   };
 
   return (
     <div className="h-full flex flex-col lg:flex-row bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden">
-      {/* Left Column: Folders & Note Cards */}
-      <div className="w-full lg:w-[360px] xl:w-[400px] border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col max-h-[46vh] lg:max-h-full">
+      {/* Left Column: Folders & Note Cards (full height on mobile when no note open) */}
+      <div
+        className={`w-full lg:w-[360px] xl:w-[400px] border-b lg:border-b-0 lg:border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex-col ${
+          draft ? 'hidden lg:flex' : 'flex flex-1 lg:flex-none'
+        } lg:h-full`}
+      >
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
           <div className="flex items-center justify-between">
             <h1 className="text-base font-semibold">Notes Studio</h1>
@@ -281,7 +546,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          toggleQuickPin(note);
+                          void toggleQuickPin(note);
                         }}
                         title={note.pinned ? 'Unpin' : 'Pin'}
                         className={`p-1 rounded ${
@@ -314,6 +579,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
+                          void flushPendingSave(true);
                           onJumpToNode(note.linkedNodeId!);
                         }}
                         className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
@@ -331,12 +597,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       </div>
 
       {/* Right Column: Full Note Editor */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+      <div className={`flex-1 overflow-y-auto p-4 sm:p-6 ${draft ? 'block' : 'hidden lg:block'}`}>
         {!draft ? (
           <div className="h-full flex flex-col items-center justify-center text-center space-y-3 max-w-md mx-auto">
             <h2 className="text-lg font-semibold">Select or Create a Note</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">
-              Document intelligence leads, architecture decisions, and investigation checklists linked bi-directionally to your graph nodes.
+              Document intelligence leads, architecture decisions, and investigation checklists linked bi-directionally to your graph nodes. Changes auto-sync across devices.
             </p>
             <button
               onClick={() => startNewNote()}
@@ -348,20 +614,81 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
           </div>
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
+            {/* Mobile Back Bar + Sync Indicator */}
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <button
+                type="button"
+                onClick={handleBackToListMobile}
+                className="lg:hidden inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 font-medium"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                Notes ({filteredNotes.length})
+              </button>
+              <div className="ml-auto inline-flex items-center gap-1.5 text-slate-500 dark:text-slate-400">
+                {syncState === 'saving' && (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                    <span>Syncing...</span>
+                  </>
+                )}
+                {syncState === 'saved' && (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    <span className="text-emerald-700 dark:text-emerald-400">Synced to cloud</span>
+                  </>
+                )}
+                {syncState === 'dirty' && (
+                  <>
+                    <Cloud className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Unsaved changes...</span>
+                  </>
+                )}
+                {syncState === 'idle' && (
+                  <>
+                    <Cloud className="w-3.5 h-3.5" />
+                    <span>Auto-sync enabled</span>
+                  </>
+                )}
+                {syncState === 'error' && (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-red-500" />
+                    <span className="text-red-600 dark:text-red-400">Sync error</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {saveError && (
+              <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300">
+                <span className="truncate">Failed to save note: {saveError}</span>
+                <button
+                  type="button"
+                  onClick={handleManualSave}
+                  className="px-2.5 py-1 rounded bg-red-600 text-white font-medium shrink-0 hover:bg-red-700"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
             {/* Title & Top Actions */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <input
                 type="text"
                 maxLength={200}
                 value={draft.title}
-                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                onChange={(e) =>
+                  updateDraftAndAutoSave((prev) => ({ ...prev, title: e.target.value }))
+                }
                 placeholder="Note title..."
                 className="flex-1 text-xl font-semibold bg-transparent border-b border-transparent focus:border-slate-300 dark:focus:border-slate-700 focus:outline-none py-1"
               />
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setDraft({ ...draft, pinned: !draft.pinned })}
+                  onClick={() =>
+                    updateDraftAndAutoSave((prev) => ({ ...prev, pinned: !prev.pinned }), true)
+                  }
                   className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border ${
                     draft.pinned
                       ? 'border-amber-400 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-300'
@@ -373,7 +700,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setDraft({ ...draft, archived: !draft.archived })}
+                  onClick={() =>
+                    updateDraftAndAutoSave(
+                      (prev) => ({ ...prev, archived: !prev.archived }),
+                      true
+                    )
+                  }
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-800"
                 >
                   <Archive className="w-3.5 h-3.5" />
@@ -383,9 +715,17 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      await onDeleteNote(draft.id);
-                      setDraft(null);
-                      setSelectedNoteId(null);
+                      clearAutoSaveTimer();
+                      dirtyRef.current = false;
+                      try {
+                        await onDeleteNote(draft.id);
+                        setDraft(null);
+                        setSelectedNoteId(null);
+                        setSyncState('idle');
+                        setSaveError(null);
+                      } catch (err) {
+                        setSaveError(formatSyncError(err));
+                      }
                     }}
                     className="p-1.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
                     title="Delete Note"
@@ -395,11 +735,11 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 )}
                 <button
                   type="button"
-                  onClick={handleSave}
-                  disabled={saving}
+                  onClick={handleManualSave}
+                  disabled={syncState === 'saving'}
                   className="px-4 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {saving ? 'Saving...' : 'Save Note'}
+                  {syncState === 'saving' ? 'Saving...' : 'Save Note'}
                 </button>
               </div>
             </div>
@@ -410,7 +750,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 <label className="block text-slate-500 mb-1">Note Type</label>
                 <select
                   value={draft.noteType}
-                  onChange={(e) => setDraft({ ...draft, noteType: e.target.value as NoteType })}
+                  onChange={(e) =>
+                    updateDraftAndAutoSave(
+                      (prev) => ({ ...prev, noteType: e.target.value as NoteType }),
+                      true
+                    )
+                  }
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 >
                   {NOTE_TYPES.map((t) => (
@@ -425,7 +770,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 <label className="block text-slate-500 mb-1">Priority</label>
                 <select
                   value={draft.priority}
-                  onChange={(e) => setDraft({ ...draft, priority: e.target.value as NotePriority })}
+                  onChange={(e) =>
+                    updateDraftAndAutoSave(
+                      (prev) => ({ ...prev, priority: e.target.value as NotePriority }),
+                      true
+                    )
+                  }
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 >
                   {PRIORITIES.map((p) => (
@@ -441,7 +791,9 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 <input
                   type="text"
                   value={draft.folder}
-                  onChange={(e) => setDraft({ ...draft, folder: e.target.value })}
+                  onChange={(e) =>
+                    updateDraftAndAutoSave((prev) => ({ ...prev, folder: e.target.value }))
+                  }
                   placeholder="e.g. Security Ops"
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 />
@@ -452,7 +804,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 <input
                   type="text"
                   value={tagsText}
-                  onChange={(e) => setTagsText(e.target.value)}
+                  onChange={(e) => {
+                    const nextTags = e.target.value;
+                    setTagsText(nextTags);
+                    tagsTextRef.current = nextTags;
+                    scheduleAutoSave();
+                  }}
                   placeholder="triage, lead"
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 />
@@ -466,7 +823,9 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                 <input
                   type="url"
                   value={draft.sourceUrl}
-                  onChange={(e) => setDraft({ ...draft, sourceUrl: e.target.value })}
+                  onChange={(e) =>
+                    updateDraftAndAutoSave((prev) => ({ ...prev, sourceUrl: e.target.value }))
+                  }
                   placeholder="https://..."
                   className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                 />
@@ -479,11 +838,14 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                     onChange={(e) => {
                       const nid = e.target.value || null;
                       const found = nodes.find((n) => n.id === nid);
-                      setDraft({
-                        ...draft,
-                        linkedNodeId: nid,
-                        linkedNodeName: found?.text ?? null,
-                      });
+                      updateDraftAndAutoSave(
+                        (prev) => ({
+                          ...prev,
+                          linkedNodeId: nid,
+                          linkedNodeName: found?.text ?? null,
+                        }),
+                        true
+                      );
                     }}
                     className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
                   >
@@ -497,7 +859,10 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                   {draft.linkedNodeId ? (
                     <button
                       type="button"
-                      onClick={() => onJumpToNode(draft.linkedNodeId!)}
+                      onClick={async () => {
+                        await flushPendingSave(true);
+                        onJumpToNode(draft.linkedNodeId!);
+                      }}
                       title="Jump to Canvas Node"
                       className="px-2.5 py-1.5 rounded-lg border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30 inline-flex items-center gap-1 whitespace-nowrap"
                     >
@@ -507,7 +872,17 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => onCreateNodeFromNote(draft)}
+                      onClick={async () => {
+                        clearAutoSaveTimer();
+                        dirtyRef.current = false;
+                        const prepared: NoteRecord = {
+                          ...draft,
+                          tags: parseTags(tagsText),
+                          wordCount: computeWords(draft.body),
+                          updatedAt: Date.now(),
+                        };
+                        await onCreateNodeFromNote(prepared);
+                      }}
                       title="Create Canvas Node from Note"
                       className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 inline-flex items-center gap-1 whitespace-nowrap"
                     >
@@ -552,7 +927,9 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
               <textarea
                 rows={10}
                 value={draft.body}
-                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                onChange={(e) =>
+                  updateDraftAndAutoSave((prev) => ({ ...prev, body: e.target.value }))
+                }
                 placeholder="Write markdown observations, timelines, or architectural notes..."
                 className="w-full p-3.5 text-sm bg-transparent focus:outline-none leading-relaxed"
               />
@@ -574,10 +951,15 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                         type="checkbox"
                         checked={item.checked}
                         onChange={() => {
-                          const next = draft.checklist.map((c, i) =>
-                            i === idx ? { ...c, checked: !c.checked } : c
+                          updateDraftAndAutoSave(
+                            (prev) => ({
+                              ...prev,
+                              checklist: prev.checklist.map((c, i) =>
+                                i === idx ? { ...c, checked: !c.checked } : c
+                              ),
+                            }),
+                            true
                           );
-                          setDraft({ ...draft, checklist: next });
                         }}
                         className="w-4 h-4 accent-blue-600"
                       />
@@ -588,10 +970,13 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
                     <button
                       type="button"
                       onClick={() =>
-                        setDraft({
-                          ...draft,
-                          checklist: draft.checklist.filter((_, i) => i !== idx),
-                        })
+                        updateDraftAndAutoSave(
+                          (prev) => ({
+                            ...prev,
+                            checklist: prev.checklist.filter((_, i) => i !== idx),
+                          }),
+                          true
+                        )
                       }
                       className="p-1 text-slate-400 hover:text-red-500"
                     >

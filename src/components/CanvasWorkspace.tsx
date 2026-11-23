@@ -1487,8 +1487,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           </span>
           {board.kind === 'shared' && board.inviteCode && (
             <>
-              <span className="hidden sm:inline text-xs text-slate-400">·</span>
-              <span className="hidden sm:inline font-mono text-xs text-blue-600 dark:text-blue-400">
+              <span className="text-xs text-slate-400">·</span>
+              <span className="font-mono text-xs text-blue-600 dark:text-blue-400">
                 {board.inviteCode}
               </span>
             </>
@@ -1739,8 +1739,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       )}
 
       {/* Bottom Mode & Zoom Toolbar */}
-      <div className="absolute bottom-3 left-3 right-3 z-20 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
-        <div className="pointer-events-auto flex flex-wrap items-center gap-1 p-1 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-xs">
+      <div className="absolute bottom-3 left-3 right-3 z-20 flex flex-col sm:flex-row sm:items-center justify-between gap-2 pointer-events-none">
+        <div className="pointer-events-auto flex flex-nowrap items-center gap-1 p-1 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-xs overflow-x-auto max-w-full">
           {(
             [
               { id: 'select', icon: MousePointer2, label: 'Select', title: 'Select (V)' },
@@ -1868,7 +1868,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
       {/* Interactive Minimap Radar (bottom-right above toolbar) */}
       {showMinimap && (
-        <div className="absolute bottom-16 right-3 z-20 rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 shadow-sm bg-white/90 dark:bg-slate-900/90">
+        <div className="absolute bottom-24 sm:bottom-16 right-3 z-20 rounded-xl overflow-hidden border border-slate-300 dark:border-slate-700 shadow-sm bg-white/90 dark:bg-slate-900/90">
           <canvas
             ref={minimapRef}
             width={176}
