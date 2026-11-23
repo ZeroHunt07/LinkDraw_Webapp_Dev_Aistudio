@@ -1074,6 +1074,27 @@ export function subscribeUserNotes(
   );
 }
 
+const CANONICAL_NOTE_KEYS = new Set([
+  'ownerId',
+  'boardId',
+  'title',
+  'body',
+  'noteType',
+  'sourceUrl',
+  'folder',
+  'tags',
+  'priority',
+  'color',
+  'pinned',
+  'archived',
+  'linkedNodeId',
+  'linkedNodeName',
+  'checklist',
+  'wordCount',
+  'createdAt',
+  'updatedAt',
+]);
+
 export async function saveUserNote(uid: string, note: NoteRecord, _isNew?: boolean): Promise<void> {
   const safeNoteId = note.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || makeSafeId('note');
   const path = `users/${uid}/notes/${safeNoteId}`;
@@ -1110,6 +1131,7 @@ export async function saveUserNote(uid: string, note: NoteRecord, _isNew?: boole
 
   let opType: OperationType = OperationType.WRITE;
   try {
+    opType = OperationType.GET;
     const existingSnap = await getDoc(docRef);
     if (!existingSnap.exists()) {
       opType = OperationType.CREATE;
@@ -1120,7 +1142,25 @@ export async function saveUserNote(uid: string, note: NoteRecord, _isNew?: boole
       });
     } else {
       opType = OperationType.UPDATE;
-      await updateDoc(docRef, mutableFields);
+      const existingData = existingSnap.data();
+      const existingKeys = Object.keys(existingData);
+      const isCanonical =
+        existingData.ownerId === uid &&
+        existingData.createdAt instanceof Timestamp &&
+        existingKeys.every((k) => CANONICAL_NOTE_KEYS.has(k));
+
+      if (isCanonical) {
+        await updateDoc(docRef, mutableFields);
+      } else {
+        await setDoc(docRef, {
+          ownerId: uid,
+          ...mutableFields,
+          createdAt:
+            existingData.createdAt instanceof Timestamp
+              ? existingData.createdAt
+              : serverTimestamp(),
+        });
+      }
     }
   } catch (err) {
     handleFirestoreError(err, opType, path);

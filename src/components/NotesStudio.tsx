@@ -62,9 +62,11 @@ function parseTags(raw: string): string[] {
 function formatSyncError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   try {
-    const parsed = JSON.parse(raw) as { error?: string };
+    const parsed = JSON.parse(raw) as { error?: string; operationType?: string };
     if (parsed && typeof parsed.error === 'string') {
-      return parsed.error;
+      return parsed.operationType
+        ? `${parsed.error} (${parsed.operationType})`
+        : parsed.error;
     }
   } catch {
     // Plain error string
