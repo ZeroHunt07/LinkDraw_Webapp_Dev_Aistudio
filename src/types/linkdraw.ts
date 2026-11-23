@@ -37,8 +37,16 @@ export interface TableData {
   colWidths?: number[];
 }
 
+export interface GraphPage {
+  id: string;
+  title: string;
+  order?: number;
+  createdAt?: number;
+}
+
 export interface GraphNode {
   id: string;
+  pageId?: string;
   x: number;
   y: number;
   w: number;
@@ -65,6 +73,7 @@ export interface GraphNode {
 
 export interface GraphEdge {
   id: string;
+  pageId?: string;
   a: string;
   b: string;
   label: string;
@@ -83,6 +92,7 @@ export interface GraphEdge {
 
 export interface StickyNote {
   id: string;
+  pageId?: string;
   x: number;
   y: number;
   w: number;
@@ -96,6 +106,7 @@ export interface StickyNote {
 
 export interface FreehandStroke {
   id: string;
+  pageId?: string;
   points: { x: number; y: number }[];
   color: string;
   width: number;
@@ -117,6 +128,7 @@ export interface GraphSettings {
 }
 
 export interface GraphDocument {
+  pages?: GraphPage[];
   nodes: GraphNode[];
   edges: GraphEdge[];
   stickies: StickyNote[];

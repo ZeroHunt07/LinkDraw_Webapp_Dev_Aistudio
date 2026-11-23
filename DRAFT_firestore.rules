@@ -86,7 +86,7 @@ service cloud.firestore {
     function isValidBoardElement(data) {
       return data.keys().hasAll(['kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['kind', 'payload', 'updatedByUid', 'updatedByName', 'createdAt', 'updatedAt'])
-        && data.kind in ['node', 'edge', 'sticky', 'stroke']
+        && data.kind in ['node', 'edge', 'sticky', 'stroke', 'page']
         && data.payload is map && data.payload.size() <= 50
         && isValidId(data.updatedByUid)
         && data.updatedByName is string && data.updatedByName.size() >= 1 && data.updatedByName.size() <= 120

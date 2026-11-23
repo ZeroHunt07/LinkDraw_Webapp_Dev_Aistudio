@@ -1,4 +1,6 @@
-import type { GraphDocument, StarterTemplateId } from '../types/linkdraw';
+import type { GraphDocument, GraphPage, StarterTemplateId } from '../types/linkdraw';
+
+export const DEFAULT_PAGE_ID = 'page_1';
 
 export const DEFAULT_LAYERS = [
   { name: 'Background' as const, visible: true, locked: false },
@@ -12,11 +14,86 @@ export const DEFAULT_SETTINGS = {
   flowAnimation: true,
 };
 
+export function makeDefaultPages(): GraphPage[] {
+  return [{ id: DEFAULT_PAGE_ID, title: 'Page 1', order: 0, createdAt: Date.now() }];
+}
+
+export function normalizePages(pages?: GraphPage[] | null): GraphPage[] {
+  if (!Array.isArray(pages) || pages.length === 0) {
+    return makeDefaultPages();
+  }
+  const seen = new Set<string>();
+  const cleaned: GraphPage[] = [];
+  pages.forEach((p, idx) => {
+    const id = String(p?.id ?? '').trim() || `page_${idx + 1}`;
+    if (seen.has(id)) return;
+    seen.add(id);
+    cleaned.push({
+      id,
+      title: String(p?.title ?? `Page ${idx + 1}`).trim() || `Page ${idx + 1}`,
+      order: typeof p?.order === 'number' && Number.isFinite(p.order) ? p.order : idx,
+      createdAt: typeof p?.createdAt === 'number' && Number.isFinite(p.createdAt) ? p.createdAt : Date.now(),
+    });
+  });
+  if (cleaned.length === 0) return makeDefaultPages();
+  cleaned.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  return cleaned.map((p, idx) => ({ ...p, order: idx }));
+}
+
+export function hasCustomPages(pages?: GraphPage[] | null): boolean {
+  const norm = normalizePages(pages);
+  return norm.length > 1 || norm[0].id !== DEFAULT_PAGE_ID || norm[0].title !== 'Page 1';
+}
+
+export function resolveElementPageId(
+  rawPageId: string | undefined | null,
+  pages: GraphPage[]
+): string {
+  const fallbackId = pages[0]?.id ?? DEFAULT_PAGE_ID;
+  if (!rawPageId) {
+    return pages.some((p) => p.id === DEFAULT_PAGE_ID) ? DEFAULT_PAGE_ID : fallbackId;
+  }
+  return pages.some((p) => p.id === rawPageId) ? rawPageId : fallbackId;
+}
+
+export function filterGraphByPage(doc: GraphDocument, targetPageId: string): GraphDocument {
+  const pages = normalizePages(doc.pages);
+  const effectivePageId = pages.some((p) => p.id === targetPageId) ? targetPageId : pages[0].id;
+  const nodePageMap = new Map<string, string>();
+  const nodes = doc.nodes.filter((n) => {
+    const pid = resolveElementPageId(n.pageId, pages);
+    nodePageMap.set(n.id, pid);
+    return pid === effectivePageId;
+  });
+  const edges = doc.edges.filter((e) => {
+    const pid = e.pageId
+      ? resolveElementPageId(e.pageId, pages)
+      : nodePageMap.get(e.a) ?? resolveElementPageId(undefined, pages);
+    return pid === effectivePageId;
+  });
+  const stickies = doc.stickies.filter(
+    (s) => resolveElementPageId(s.pageId, pages) === effectivePageId
+  );
+  const strokes = doc.strokes.filter(
+    (st) => resolveElementPageId(st.pageId, pages) === effectivePageId
+  );
+  return {
+    pages,
+    nodes,
+    edges,
+    stickies,
+    strokes,
+    layers: doc.layers,
+    settings: doc.settings,
+  };
+}
+
 export function createStarterTemplate(template: StarterTemplateId): GraphDocument {
   const now = Date.now();
 
   if (template === 'blank') {
     return {
+      pages: makeDefaultPages(),
       nodes: [],
       edges: [],
       stickies: [],

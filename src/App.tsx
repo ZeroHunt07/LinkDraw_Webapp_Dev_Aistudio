@@ -18,6 +18,7 @@ import type {
   GraphDocument,
   GraphEdge,
   GraphNode,
+  GraphPage,
   NoteRecord,
   StarterTemplateId,
   StickyNote,
@@ -53,7 +54,16 @@ import {
   updateCollabBoardSettings,
   upsertPresence,
 } from './lib/firestoreSync';
-import { createStarterTemplate, DEFAULT_LAYERS, DEFAULT_SETTINGS } from './lib/templates';
+import {
+  createStarterTemplate,
+  DEFAULT_LAYERS,
+  DEFAULT_PAGE_ID,
+  DEFAULT_SETTINGS,
+  filterGraphByPage,
+  makeDefaultPages,
+  normalizePages,
+  resolveElementPageId,
+} from './lib/templates';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { WorkspacesHome } from './components/WorkspacesHome';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
@@ -67,6 +77,7 @@ import { NotesStudio } from './components/NotesStudio';
 import { UtilitiesSuite } from './components/UtilitiesSuite';
 
 const EMPTY_GRAPH: GraphDocument = {
+  pages: makeDefaultPages(),
   nodes: [],
   edges: [],
   stickies: [],
@@ -106,10 +117,11 @@ function LinkDrawApp() {
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
 
-  // Active Canvas Graph + Undo/Redo
+  // Active Canvas Graph + Pages + Undo/Redo
   const [graph, setGraph] = useState<GraphDocument>(EMPTY_GRAPH);
-  const [undoStack, setUndoStack] = useState<GraphDocument[]>([]);
-  const [redoStack, setRedoStack] = useState<GraphDocument[]>([]);
+  const [activePageId, setActivePageId] = useState<string>(DEFAULT_PAGE_ID);
+  const [undoStack, setUndoStack] = useState<{ graph: GraphDocument; pageId: string }[]>([]);
+  const [redoStack, setRedoStack] = useState<{ graph: GraphDocument; pageId: string }[]>([]);
 
   // Collaboration state
   const [presence, setPresence] = useState<CollabPresence[]>([]);
@@ -156,6 +168,7 @@ function LinkDrawApp() {
   const activeBoardSettingsRef = useRef<GraphDocument['settings']>({ ...DEFAULT_SETTINGS });
   const latestCollabSnapshotRef = useRef<{
     boardId: string;
+    pages: GraphPage[];
     nodes: GraphNode[];
     edges: GraphEdge[];
     stickies: StickyNote[];
@@ -165,6 +178,26 @@ function LinkDrawApp() {
   const personalSaveTimerRef = useRef<number | null>(null);
   const graphRef = useRef<GraphDocument>(graph);
   graphRef.current = graph;
+  const pages = useMemo(() => normalizePages(graph.pages), [graph.pages]);
+  const effectivePageId = useMemo(
+    () => (pages.some((p) => p.id === activePageId) ? activePageId : pages[0].id),
+    [pages, activePageId]
+  );
+  const effectivePageIdRef = useRef<string>(effectivePageId);
+  effectivePageIdRef.current = effectivePageId;
+  const activePageGraph = useMemo(
+    () => filterGraphByPage(graph, effectivePageId),
+    [graph, effectivePageId]
+  );
+  const pageNodeCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of pages) counts[p.id] = 0;
+    for (const n of graph.nodes) {
+      const pid = resolveElementPageId(n.pageId, pages);
+      counts[pid] = (counts[pid] ?? 0) + 1;
+    }
+    return counts;
+  }, [graph.nodes, pages]);
 
   const notify = useCallback((msg: string) => {
     setToast(msg);
@@ -242,6 +275,10 @@ function LinkDrawApp() {
           lastCollabMetaRef.current = new Map();
           latestCollabSnapshotRef.current = null;
           collabPendingCountRef.current = 0;
+          setUndoStack([]);
+          setRedoStack([]);
+          clearCanvasSelection();
+          setActivePageId(DEFAULT_PAGE_ID);
           setActiveBoardId(boardId);
           setSection('canvas');
           notify(`Joined shared board (${code.toUpperCase()}).`);
@@ -272,11 +309,12 @@ function LinkDrawApp() {
     latestCollabSnapshotRef.current = null;
     const unsubElems = subscribeCollabElements(
       targetBoardId,
-      ({ nodes, edges, stickies, strokes, elementMeta }) => {
+      ({ pages: nextPages, nodes, edges, stickies, strokes, elementMeta }) => {
         if (activeBoardIdRef.current !== targetBoardId) return;
         if (collabPendingCountRef.current > 0) {
           latestCollabSnapshotRef.current = {
             boardId: targetBoardId,
+            pages: nextPages,
             nodes,
             edges,
             stickies,
@@ -288,6 +326,7 @@ function LinkDrawApp() {
         lastCollabMetaRef.current = elementMeta;
         setGraph((prev) => ({
           ...prev,
+          pages: nextPages,
           nodes,
           edges,
           stickies,
@@ -341,7 +380,10 @@ function LinkDrawApp() {
     (nextGraph: GraphDocument, recordUndo = true) => {
       const prev = graphRef.current;
       if (recordUndo) {
-        setUndoStack((stk) => [...stk.slice(-59), cloneGraph(prev)]);
+        setUndoStack((stk) => [
+          ...stk.slice(-59),
+          { graph: cloneGraph(prev), pageId: effectivePageIdRef.current },
+        ]);
         setRedoStack([]);
       }
       setGraph(nextGraph);
@@ -384,6 +426,7 @@ function LinkDrawApp() {
               lastCollabMetaRef.current = deferred.elementMeta;
               setGraph((curr) => ({
                 ...curr,
+                pages: deferred.pages,
                 nodes: deferred.nodes,
                 edges: deferred.edges,
                 stickies: deferred.stickies,
@@ -422,43 +465,339 @@ function LinkDrawApp() {
     [user, activeBoard, notify]
   );
 
+  const commitPageGraph = useCallback(
+    (nextPageGraph: GraphDocument, recordUndo = true) => {
+      const prev = graphRef.current;
+      const prevPages = normalizePages(prev.pages);
+      const pageId = prevPages.some((p) => p.id === effectivePageIdRef.current)
+        ? effectivePageIdRef.current
+        : prevPages[0].id;
+      const prevNodePageMap = new Map<string, string>();
+      for (const n of prev.nodes) {
+        prevNodePageMap.set(n.id, resolveElementPageId(n.pageId, prevPages));
+      }
+
+      const otherNodes = prev.nodes.filter(
+        (n) => resolveElementPageId(n.pageId, prevPages) !== pageId
+      );
+      const otherEdges = prev.edges.filter((e) => {
+        const pid = e.pageId
+          ? resolveElementPageId(e.pageId, prevPages)
+          : prevNodePageMap.get(e.a) ?? resolveElementPageId(undefined, prevPages);
+        return pid !== pageId;
+      });
+      const otherStickies = prev.stickies.filter(
+        (s) => resolveElementPageId(s.pageId, prevPages) !== pageId
+      );
+      const otherStrokes = prev.strokes.filter(
+        (st) => resolveElementPageId(st.pageId, prevPages) !== pageId
+      );
+
+      const stamp = pageId === DEFAULT_PAGE_ID ? undefined : pageId;
+      const stampedNodes = nextPageGraph.nodes.map((n) => ({ ...n, pageId: stamp ?? n.pageId }));
+      const stampedEdges = nextPageGraph.edges.map((e) => ({ ...e, pageId: stamp ?? e.pageId }));
+      const stampedStickies = nextPageGraph.stickies.map((s) => ({
+        ...s,
+        pageId: stamp ?? s.pageId,
+      }));
+      const stampedStrokes = nextPageGraph.strokes.map((st) => ({
+        ...st,
+        pageId: stamp ?? st.pageId,
+      }));
+
+      commitGraph(
+        {
+          pages: prevPages,
+          nodes: [...otherNodes, ...stampedNodes],
+          edges: [...otherEdges, ...stampedEdges],
+          stickies: [...otherStickies, ...stampedStickies],
+          strokes: [...otherStrokes, ...stampedStrokes],
+          layers: nextPageGraph.layers,
+          settings: nextPageGraph.settings,
+        },
+        recordUndo
+      );
+    },
+    [commitGraph]
+  );
+
   const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
-    const prevSnapshot = undoStack[undoStack.length - 1];
+    const prevEntry = undoStack[undoStack.length - 1];
     setUndoStack((stk) => stk.slice(0, -1));
-    setRedoStack((stk) => [...stk, cloneGraph(graphRef.current)]);
-    commitGraph(prevSnapshot, false);
+    setRedoStack((stk) => [
+      ...stk,
+      { graph: cloneGraph(graphRef.current), pageId: effectivePageIdRef.current },
+    ]);
+    setActivePageId(prevEntry.pageId);
+    commitGraph(prevEntry.graph, false);
   }, [undoStack, commitGraph]);
 
   const handleRedo = useCallback(() => {
     if (redoStack.length === 0) return;
-    const nextSnapshot = redoStack[redoStack.length - 1];
+    const nextEntry = redoStack[redoStack.length - 1];
     setRedoStack((stk) => stk.slice(0, -1));
-    setUndoStack((stk) => [...stk, cloneGraph(graphRef.current)]);
-    commitGraph(nextSnapshot, false);
+    setUndoStack((stk) => [
+      ...stk,
+      { graph: cloneGraph(graphRef.current), pageId: effectivePageIdRef.current },
+    ]);
+    setActivePageId(nextEntry.pageId);
+    commitGraph(nextEntry.graph, false);
   }, [redoStack, commitGraph]);
 
-  // Workspace Handlers
-  const handleSelectBoard = (board: WorkspaceBoard) => {
-    setUndoStack([]);
-    setRedoStack([]);
+  // Multi-Page Handlers
+  const clearCanvasSelection = useCallback(() => {
     setSelectedNodeIds([]);
     setSelectedEdgeId(null);
     setSelectedStickyId(null);
     setHighlightedNodeIds(new Set());
     setHighlightedEdgeIds(new Set());
+  }, []);
+
+  const handleSelectPage = useCallback(
+    (pageId: string) => {
+      clearCanvasSelection();
+      setActivePageId(pageId);
+    },
+    [clearCanvasSelection]
+  );
+
+  const handleAddPage = useCallback(() => {
+    const curr = graphRef.current;
+    const currPages = normalizePages(curr.pages);
+    const usedTitles = new Set(currPages.map((p) => p.title.toLowerCase()));
+    let num = currPages.length + 1;
+    while (usedTitles.has(`page ${num}`)) num += 1;
+    const newPage: GraphPage = {
+      id: makeSafeId('pg'),
+      title: `Page ${num}`,
+      order: currPages.length,
+      createdAt: Date.now(),
+    };
+    const nextPages = [...currPages, newPage];
+    clearCanvasSelection();
+    setActivePageId(newPage.id);
+    commitGraph({ ...curr, pages: nextPages }, true);
+    notify(`Added "${newPage.title}".`);
+  }, [clearCanvasSelection, commitGraph, notify]);
+
+  const handleRenamePage = useCallback(
+    (pageId: string, title: string) => {
+      const trimmed = title.trim().slice(0, 120);
+      if (!trimmed) return;
+      const curr = graphRef.current;
+      const currPages = normalizePages(curr.pages);
+      const nextPages = currPages.map((p) => (p.id === pageId ? { ...p, title: trimmed } : p));
+      commitGraph({ ...curr, pages: nextPages }, true);
+    },
+    [commitGraph]
+  );
+
+  const handleDuplicatePage = useCallback(
+    (pageId: string) => {
+      const curr = graphRef.current;
+      const currPages = normalizePages(curr.pages);
+      const sourceIdx = currPages.findIndex((p) => p.id === pageId);
+      const sourcePage = currPages[sourceIdx] ?? currPages[0];
+      const sourceGraph = filterGraphByPage(curr, sourcePage.id);
+      const newPageId = makeSafeId('pg');
+      const newPage: GraphPage = {
+        id: newPageId,
+        title: `${sourcePage.title} (Copy)`.slice(0, 120),
+        order: sourceIdx + 1,
+        createdAt: Date.now(),
+      };
+      const now = Date.now();
+      const nodeIdMap = new Map<string, string>();
+      const clonedNodes = sourceGraph.nodes.map((n) => {
+        const nextId = makeSafeId('n');
+        nodeIdMap.set(n.id, nextId);
+        return { ...cloneGraph({ ...sourceGraph, nodes: [n], edges: [], stickies: [], strokes: [] }).nodes[0], id: nextId, pageId: newPageId, createdAt: now, updatedAt: now };
+      });
+      const clonedEdges = sourceGraph.edges
+        .filter((e) => nodeIdMap.has(e.a) && nodeIdMap.has(e.b))
+        .map((e) => ({
+          ...e,
+          id: makeSafeId('e'),
+          pageId: newPageId,
+          a: nodeIdMap.get(e.a)!,
+          b: nodeIdMap.get(e.b)!,
+          createdAt: now,
+          updatedAt: now,
+        }));
+      const clonedStickies = sourceGraph.stickies.map((s) => ({
+        ...s,
+        id: makeSafeId('s'),
+        pageId: newPageId,
+        createdAt: now,
+        updatedAt: now,
+      }));
+      const clonedStrokes = sourceGraph.strokes.map((st) => ({
+        ...st,
+        id: makeSafeId('st'),
+        pageId: newPageId,
+        points: st.points.map((pt) => ({ ...pt })),
+        createdAt: now,
+      }));
+
+      const nextPages = [
+        ...currPages.slice(0, sourceIdx + 1),
+        newPage,
+        ...currPages.slice(sourceIdx + 1),
+      ].map((p, idx) => ({ ...p, order: idx }));
+
+      clearCanvasSelection();
+      setActivePageId(newPageId);
+      commitGraph(
+        {
+          ...curr,
+          pages: nextPages,
+          nodes: [...curr.nodes, ...clonedNodes],
+          edges: [...curr.edges, ...clonedEdges],
+          stickies: [...curr.stickies, ...clonedStickies],
+          strokes: [...curr.strokes, ...clonedStrokes],
+        },
+        true
+      );
+      notify(`Duplicated "${sourcePage.title}".`);
+    },
+    [clearCanvasSelection, commitGraph, notify]
+  );
+
+  const handleMovePage = useCallback(
+    (pageId: string, direction: -1 | 1) => {
+      const curr = graphRef.current;
+      const currPages = normalizePages(curr.pages);
+      const idx = currPages.findIndex((p) => p.id === pageId);
+      const targetIdx = idx + direction;
+      if (idx < 0 || targetIdx < 0 || targetIdx >= currPages.length) return;
+      const reordered = [...currPages];
+      const [moved] = reordered.splice(idx, 1);
+      reordered.splice(targetIdx, 0, moved);
+      const nextPages = reordered.map((p, i) => ({ ...p, order: i }));
+      commitGraph({ ...curr, pages: nextPages }, true);
+    },
+    [commitGraph]
+  );
+
+  const handleDeletePage = useCallback(
+    (pageId: string) => {
+      const curr = graphRef.current;
+      const currPages = normalizePages(curr.pages);
+      if (currPages.length <= 1) {
+        notify('At least one page is required.');
+        return;
+      }
+      const delIdx = currPages.findIndex((p) => p.id === pageId);
+      const removed = currPages[delIdx];
+      const remainingPages = currPages
+        .filter((p) => p.id !== pageId)
+        .map((p, idx) => ({ ...p, order: idx }));
+
+      const prevNodePageMap = new Map<string, string>();
+      for (const n of curr.nodes) {
+        prevNodePageMap.set(n.id, resolveElementPageId(n.pageId, currPages));
+      }
+
+      const nextNodes = curr.nodes.filter(
+        (n) => resolveElementPageId(n.pageId, currPages) !== pageId
+      );
+      const nextEdges = curr.edges.filter((e) => {
+        const pid = e.pageId
+          ? resolveElementPageId(e.pageId, currPages)
+          : prevNodePageMap.get(e.a) ?? resolveElementPageId(undefined, currPages);
+        return pid !== pageId;
+      });
+      const nextStickies = curr.stickies.filter(
+        (s) => resolveElementPageId(s.pageId, currPages) !== pageId
+      );
+      const nextStrokes = curr.strokes.filter(
+        (st) => resolveElementPageId(st.pageId, currPages) !== pageId
+      );
+
+      const nextActive = remainingPages[Math.max(0, Math.min(delIdx, remainingPages.length - 1))];
+      clearCanvasSelection();
+      setActivePageId(nextActive.id);
+      commitGraph(
+        {
+          ...curr,
+          pages: remainingPages,
+          nodes: nextNodes,
+          edges: nextEdges,
+          stickies: nextStickies,
+          strokes: nextStrokes,
+        },
+        true
+      );
+      notify(`Deleted "${removed?.title ?? 'page'}".`);
+    },
+    [clearCanvasSelection, commitGraph, notify]
+  );
+
+  const handleMoveSelectionToPage = useCallback(
+    (targetPageId: string) => {
+      const curr = graphRef.current;
+      const currPages = normalizePages(curr.pages);
+      const targetPg = currPages.find((p) => p.id === targetPageId);
+      if (!targetPg) return;
+
+      const selectedNodeSet = new Set(selectedNodeIds);
+      const stamp = targetPageId === DEFAULT_PAGE_ID ? DEFAULT_PAGE_ID : targetPageId;
+      const nextNodes = curr.nodes.map((n) =>
+        selectedNodeSet.has(n.id) ? { ...n, pageId: stamp, updatedAt: Date.now() } : n
+      );
+      const nodePageAfter = new Map<string, string>();
+      for (const n of nextNodes) {
+        nodePageAfter.set(n.id, resolveElementPageId(n.pageId, currPages));
+      }
+      const nextEdges = curr.edges.map((e) => {
+        const bothMovedOnTarget =
+          nodePageAfter.get(e.a) === targetPageId && nodePageAfter.get(e.b) === targetPageId;
+        if (e.id === selectedEdgeId || (bothMovedOnTarget && (selectedNodeSet.has(e.a) || selectedNodeSet.has(e.b)))) {
+          return { ...e, pageId: stamp, updatedAt: Date.now() };
+        }
+        return e;
+      });
+      const nextStickies = curr.stickies.map((s) =>
+        s.id === selectedStickyId ? { ...s, pageId: stamp, updatedAt: Date.now() } : s
+      );
+
+      clearCanvasSelection();
+      setActivePageId(targetPageId);
+      commitGraph(
+        {
+          ...curr,
+          nodes: nextNodes,
+          edges: nextEdges,
+          stickies: nextStickies,
+        },
+        true
+      );
+      notify(`Moved selection to "${targetPg.title}".`);
+    },
+    [clearCanvasSelection, commitGraph, notify, selectedEdgeId, selectedNodeIds, selectedStickyId]
+  );
+
+  // Workspace Handlers
+  const handleSelectBoard = (board: WorkspaceBoard) => {
+    setUndoStack([]);
+    setRedoStack([]);
+    clearCanvasSelection();
     lastCollabMetaRef.current = new Map();
     latestCollabSnapshotRef.current = null;
     collabPendingCountRef.current = 0;
     setActiveBoardId(board.id);
     if (board.kind === 'personal' && board.graphData) {
-      setGraph(board.graphData);
+      const normPages = normalizePages(board.graphData.pages);
+      setActivePageId(normPages[0].id);
+      setGraph({ ...board.graphData, pages: normPages });
     } else {
       activeBoardSettingsRef.current = {
         gridSnap: board.gridSnap,
         gridSize: board.gridSize,
         flowAnimation: board.flowAnimation,
       };
+      setActivePageId(DEFAULT_PAGE_ID);
       setGraph(EMPTY_GRAPH);
     }
     setSection('canvas');
@@ -472,7 +811,9 @@ function LinkDrawApp() {
     customGraph?: GraphDocument;
   }) => {
     if (!user) return;
-    const initialGraph = opts.customGraph ?? createStarterTemplate(opts.template);
+    const rawInitial = opts.customGraph ?? createStarterTemplate(opts.template);
+    const normPages = normalizePages(rawInitial.pages);
+    const initialGraph: GraphDocument = { ...rawInitial, pages: normPages };
     const displayName = user.displayName || user.email || 'User';
     const created = opts.shared
       ? await createCollabBoard(user.uid, displayName, opts.title, opts.description, initialGraph)
@@ -488,6 +829,7 @@ function LinkDrawApp() {
       activeBoardSettingsRef.current = { ...initialGraph.settings };
     }
     setActiveBoardId(created.id);
+    setActivePageId(normPages[0].id);
     setGraph(initialGraph);
     setSection('canvas');
     notify(
@@ -507,6 +849,10 @@ function LinkDrawApp() {
     lastCollabMetaRef.current = new Map();
     latestCollabSnapshotRef.current = null;
     collabPendingCountRef.current = 0;
+    setUndoStack([]);
+    setRedoStack([]);
+    clearCanvasSelection();
+    setActivePageId(DEFAULT_PAGE_ID);
     setActiveBoardId(boardId);
     setSection('canvas');
     notify(`Joined shared board (${code}).`);
@@ -572,6 +918,8 @@ function LinkDrawApp() {
     if (kind === 'node') {
       const node = graph.nodes.find((n) => n.id === targetId);
       if (node) {
+        const targetPage = resolveElementPageId(node.pageId, pages);
+        if (targetPage !== effectivePageId) setActivePageId(targetPage);
         setSelectedNodeIds([node.id]);
         setSelectedEdgeId(null);
         setSelectedStickyId(null);
@@ -582,6 +930,8 @@ function LinkDrawApp() {
       if (edge) {
         const a = graph.nodes.find((n) => n.id === edge.a);
         const b = graph.nodes.find((n) => n.id === edge.b);
+        const targetPage = resolveElementPageId(edge.pageId ?? a?.pageId, pages);
+        if (targetPage !== effectivePageId) setActivePageId(targetPage);
         setSelectedNodeIds([]);
         setSelectedEdgeId(edge.id);
         setSelectedStickyId(null);
@@ -804,7 +1154,10 @@ function LinkDrawApp() {
           <CanvasWorkspace
             board={activeBoard}
             uid={user.uid}
-            graph={graph}
+            graph={activePageGraph}
+            pages={pages}
+            activePageId={effectivePageId}
+            pageNodeCounts={pageNodeCounts}
             theme={theme}
             presence={presence}
             commentCount={comments.length}
@@ -818,7 +1171,14 @@ function LinkDrawApp() {
             canRedo={redoStack.length > 0}
             onUndo={handleUndo}
             onRedo={handleRedo}
-            onCommitGraph={commitGraph}
+            onSelectPage={handleSelectPage}
+            onAddPage={handleAddPage}
+            onRenamePage={handleRenamePage}
+            onDuplicatePage={handleDuplicatePage}
+            onDeletePage={handleDeletePage}
+            onMovePage={handleMovePage}
+            onMoveSelectionToPage={handleMoveSelectionToPage}
+            onCommitGraph={commitPageGraph}
             onSelectionChange={(nIds, eId, sId) => {
               setSelectedNodeIds(nIds);
               setSelectedEdgeId(eId);
@@ -873,6 +1233,7 @@ function LinkDrawApp() {
               const now = Date.now();
               const newNode: GraphNode = {
                 id: makeSafeId('n'),
+                pageId: effectivePageId,
                 x: Math.round((Math.random() - 0.5) * 160),
                 y: Math.round((Math.random() - 0.5) * 120),
                 w: 170,
@@ -888,8 +1249,8 @@ function LinkDrawApp() {
                 createdAt: now,
                 updatedAt: now,
               };
-              const nextGraph = { ...graph, nodes: [...graph.nodes, newNode] };
-              commitGraph(nextGraph, true);
+              const nextPageGraph = { ...activePageGraph, nodes: [...activePageGraph.nodes, newNode] };
+              commitPageGraph(nextPageGraph, true);
               try {
                 const noteExists = notes.some((existing) => existing.id === note.id);
                 await saveUserNote(
@@ -912,18 +1273,19 @@ function LinkDrawApp() {
             activeSubTab={utilitySubTab}
             onSubTabChange={setUtilitySubTab}
             boardTitle={activeBoard?.title ?? 'No Active Board'}
-            graph={graph}
+            graph={activePageGraph}
+            fullGraph={graph}
             theme={theme}
             userId={user.uid}
             userEmail={user.email || ''}
             userName={user.displayName || 'LinkDraw Analyst'}
             onChangeTheme={setTheme}
-            onUpdateGraph={commitGraph}
+            onUpdateGraph={commitPageGraph}
             onHighlightElements={(nIds, eIds) => {
               setHighlightedNodeIds(new Set(nIds));
               setHighlightedEdgeIds(new Set(eIds));
               if (nIds.length > 0) {
-                const first = graph.nodes.find((n) => n.id === nIds[0]);
+                const first = activePageGraph.nodes.find((n) => n.id === nIds[0]);
                 if (first) setFocusRequest({ x: first.x, y: first.y, ts: Date.now() });
               }
             }}
@@ -987,20 +1349,20 @@ function LinkDrawApp() {
         <NodeInspectorModal
           node={inspectedNode}
           onUpdate={(updated) => {
-            commitGraph(
+            commitPageGraph(
               {
-                ...graph,
-                nodes: graph.nodes.map((n) => (n.id === updated.id ? updated : n)),
+                ...activePageGraph,
+                nodes: activePageGraph.nodes.map((n) => (n.id === updated.id ? updated : n)),
               },
               true
             );
           }}
           onDelete={(id) => {
-            commitGraph(
+            commitPageGraph(
               {
-                ...graph,
-                nodes: graph.nodes.filter((n) => n.id !== id),
-                edges: graph.edges.filter((e) => e.a !== id && e.b !== id),
+                ...activePageGraph,
+                nodes: activePageGraph.nodes.filter((n) => n.id !== id),
+                edges: activePageGraph.edges.filter((e) => e.a !== id && e.b !== id),
               },
               true
             );
@@ -1019,17 +1381,17 @@ function LinkDrawApp() {
         <EdgeInspectorModal
           edge={inspectedEdge}
           onUpdate={(updated) => {
-            commitGraph(
+            commitPageGraph(
               {
-                ...graph,
-                edges: graph.edges.map((e) => (e.id === updated.id ? updated : e)),
+                ...activePageGraph,
+                edges: activePageGraph.edges.map((e) => (e.id === updated.id ? updated : e)),
               },
               true
             );
           }}
           onDelete={(id) => {
-            commitGraph(
-              { ...graph, edges: graph.edges.filter((e) => e.id !== id) },
+            commitPageGraph(
+              { ...activePageGraph, edges: activePageGraph.edges.filter((e) => e.id !== id) },
               true
             );
             setSelectedEdgeId(null);
@@ -1042,17 +1404,17 @@ function LinkDrawApp() {
         <StickyInspectorModal
           sticky={inspectedSticky}
           onUpdate={(updated) => {
-            commitGraph(
+            commitPageGraph(
               {
-                ...graph,
-                stickies: graph.stickies.map((s) => (s.id === updated.id ? updated : s)),
+                ...activePageGraph,
+                stickies: activePageGraph.stickies.map((s) => (s.id === updated.id ? updated : s)),
               },
               true
             );
           }}
           onDelete={(id) => {
-            commitGraph(
-              { ...graph, stickies: graph.stickies.filter((s) => s.id !== id) },
+            commitPageGraph(
+              { ...activePageGraph, stickies: activePageGraph.stickies.filter((s) => s.id !== id) },
               true
             );
             setSelectedStickyId(null);

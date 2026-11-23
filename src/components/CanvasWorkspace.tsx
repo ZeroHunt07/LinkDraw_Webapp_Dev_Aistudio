@@ -3,18 +3,25 @@ import {
   AlignCenterHorizontal,
   AlignLeft,
   AlignStartVertical,
+  ChevronLeft,
+  ChevronRight,
   Columns3,
+  Copy,
   Eraser,
   Eye,
   EyeOff,
+  FolderInput,
   Highlighter,
   Layers,
   Lock,
   Map as MapIcon,
   Maximize2,
   MessageSquare,
+  MoreVertical,
   MousePointer2,
   Pen,
+  Pencil,
+  Plus,
   PlusSquare,
   Redo2,
   Rows3,
@@ -37,6 +44,7 @@ import type {
   GraphDocument,
   GraphEdge,
   GraphNode,
+  GraphPage,
   StickyNote,
   ThemeMode,
   ToolMode,
@@ -62,6 +70,9 @@ interface CanvasWorkspaceProps {
   board: WorkspaceBoard;
   uid: string;
   graph: GraphDocument;
+  pages: GraphPage[];
+  activePageId: string;
+  pageNodeCounts: Record<string, number>;
   theme: ThemeMode;
   presence: CollabPresence[];
   commentCount: number;
@@ -75,6 +86,13 @@ interface CanvasWorkspaceProps {
   canRedo: boolean;
   onUndo: () => void;
   onRedo: () => void;
+  onSelectPage: (pageId: string) => void;
+  onAddPage: () => void;
+  onRenamePage: (pageId: string, title: string) => void;
+  onDuplicatePage: (pageId: string) => void;
+  onDeletePage: (pageId: string) => void;
+  onMovePage: (pageId: string, direction: -1 | 1) => void;
+  onMoveSelectionToPage: (targetPageId: string) => void;
   onCommitGraph: (nextGraph: GraphDocument, recordUndo?: boolean) => void;
   onSelectionChange: (nodeIds: string[], edgeId: string | null, stickyId: string | null) => void;
   onInspectNode: (node: GraphNode) => void;
@@ -101,6 +119,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   board,
   uid,
   graph,
+  pages,
+  activePageId,
+  pageNodeCounts,
   theme,
   presence,
   commentCount,
@@ -114,6 +135,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   canRedo,
   onUndo,
   onRedo,
+  onSelectPage,
+  onAddPage,
+  onRenamePage,
+  onDuplicatePage,
+  onDeletePage,
+  onMovePage,
+  onMoveSelectionToPage,
   onCommitGraph,
   onSelectionChange,
   onInspectNode,
@@ -135,9 +163,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const [showSearch, setShowSearch] = useState(false);
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
+  const [editingPageId, setEditingPageId] = useState<string | null>(null);
+  const [editingPageTitle, setEditingPageTitle] = useState('');
+  const [showPageMenu, setShowPageMenu] = useState(false);
 
   // Ephemeral camera & drag state stored in refs for 60fps loop without React re-render overhead
   const cameraRef = useRef<Camera>({ ox: 420, oy: 280, scale: 1 });
+  const pageCamerasRef = useRef<Map<string, Camera>>(new Map());
   const liveGraphRef = useRef<GraphDocument>(graph);
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const gestureRef = useRef<
@@ -180,30 +212,43 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     }
   }, [graph]);
 
-  // Center camera on first mount or board change
+  // Center/restore camera per board & page
+  const viewKey = `${board.id}::${activePageId}`;
   useEffect(() => {
+    setConnectSourceId(null);
+    setShowPageMenu(false);
+    setEditingPageId(null);
     const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    if (graph.nodes.length > 0) {
-      let sumX = 0;
-      let sumY = 0;
-      for (const n of graph.nodes) {
-        sumX += n.x;
-        sumY += n.y;
+    if (el) {
+      const saved = pageCamerasRef.current.get(viewKey);
+      if (saved) {
+        cameraRef.current = { ...saved };
+      } else {
+        const rect = el.getBoundingClientRect();
+        if (graph.nodes.length > 0) {
+          let sumX = 0;
+          let sumY = 0;
+          for (const n of graph.nodes) {
+            sumX += n.x;
+            sumY += n.y;
+          }
+          const cx = sumX / graph.nodes.length;
+          const cy = sumY / graph.nodes.length;
+          cameraRef.current = {
+            ox: rect.width / 2 - cx,
+            oy: rect.height / 2 - cy,
+            scale: 1,
+          };
+        } else {
+          cameraRef.current = { ox: rect.width / 2, oy: rect.height / 2, scale: 1 };
+        }
       }
-      const cx = sumX / graph.nodes.length;
-      const cy = sumY / graph.nodes.length;
-      cameraRef.current = {
-        ox: rect.width / 2 - cx,
-        oy: rect.height / 2 - cy,
-        scale: 1,
-      };
-    } else {
-      cameraRef.current = { ox: rect.width / 2, oy: rect.height / 2, scale: 1 };
+      setZoomPct(Math.round(cameraRef.current.scale * 100));
     }
-    setZoomPct(Math.round(cameraRef.current.scale * 100));
-  }, [board.id]);
+    return () => {
+      pageCamerasRef.current.set(viewKey, { ...cameraRef.current });
+    };
+  }, [viewKey]);
 
   // Handle focus requests (e.g. from Comments, Timeline, Adjacency Matrix, Notes)
   useEffect(() => {
@@ -1601,19 +1646,239 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     }
   };
 
+  const activePageIndex = Math.max(0, pages.findIndex((p) => p.id === activePageId));
+  const activePageObj = pages[activePageIndex] ?? pages[0];
+
+  const startRenamePage = (pg: GraphPage) => {
+    setEditingPageId(pg.id);
+    setEditingPageTitle(pg.title);
+    setShowPageMenu(false);
+  };
+
+  const commitRenamePage = () => {
+    if (!editingPageId) return;
+    const trimmed = editingPageTitle.trim();
+    if (trimmed) {
+      onRenamePage(editingPageId, trimmed);
+    }
+    setEditingPageId(null);
+  };
+
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden select-none">
-      {/* Main 60fps HTML5 Canvas */}
-      <canvas
-        ref={canvasRef}
-        onWheel={handleWheel}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUpOrCancel}
-        onPointerCancel={handlePointerUpOrCancel}
-        onPointerLeave={() => {
-          pointerWorldRef.current = null;
-        }}
+    <div className="w-full h-full flex flex-col overflow-hidden select-none">
+      {/* Multi-Page Tab Strip */}
+      <div className="relative z-30 h-10 px-2.5 flex items-center gap-1.5 bg-white/95 dark:bg-slate-900/95 border-b border-slate-200 dark:border-slate-800 shrink-0">
+        <div className="flex-1 min-w-0 flex items-center gap-1 overflow-x-auto">
+          {pages.map((pg, idx) => {
+            const isActive = pg.id === activePageId;
+            const nodeCount = pageNodeCounts[pg.id] ?? 0;
+            const isEditing = editingPageId === pg.id;
+            return (
+              <div
+                key={pg.id}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 border ${
+                  isActive
+                    ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800'
+                    : 'bg-transparent text-slate-600 dark:text-slate-400 border-transparent hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100'
+                }`}
+              >
+                {isEditing ? (
+                  <input
+                    type="text"
+                    autoFocus
+                    value={editingPageTitle}
+                    onChange={(e) => setEditingPageTitle(e.target.value)}
+                    onBlur={commitRenamePage}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitRenamePage();
+                      if (e.key === 'Escape') setEditingPageId(null);
+                    }}
+                    className="w-28 px-1 py-0 text-xs bg-white dark:bg-slate-950 text-slate-900 dark:text-slate-100 border border-blue-400 rounded focus:outline-none"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPageMenu(false);
+                      if (!isActive) onSelectPage(pg.id);
+                    }}
+                    onDoubleClick={() => startRenamePage(pg)}
+                    title={`${pg.title} (Double-click to rename)`}
+                    className="inline-flex items-center gap-1.5 text-left"
+                  >
+                    <span className="text-[10px] font-mono opacity-60 tabular-nums">{idx + 1}</span>
+                    <span className="max-w-[140px] truncate">{pg.title}</span>
+                    {nodeCount > 0 && (
+                      <span
+                        className={`text-[10px] font-mono tabular-nums px-1 rounded ${
+                          isActive
+                            ? 'bg-blue-100 dark:bg-blue-900/70 text-blue-700 dark:text-blue-200'
+                            : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                        }`}
+                      >
+                        {nodeCount}
+                      </span>
+                    )}
+                  </button>
+                )}
+
+                {isActive && !isEditing && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startRenamePage(pg);
+                    }}
+                    title="Rename page"
+                    className="p-0.5 rounded hover:bg-blue-100 dark:hover:bg-blue-900/60 opacity-70 hover:opacity-100"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0 pl-1 border-l border-slate-200 dark:border-slate-800">
+          <button
+            type="button"
+            onClick={() => {
+              setShowPageMenu(false);
+              onAddPage();
+            }}
+            title="Add new page"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 whitespace-nowrap"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Page</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowPageMenu((v) => !v)}
+            title="Active page actions"
+            className={`p-1.5 rounded-lg transition-colors ${
+              showPageMenu
+                ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100'
+                : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <MoreVertical className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Active Page Actions Popover */}
+        {showPageMenu && activePageObj && (
+          <div className="absolute right-2.5 top-full mt-1.5 z-40 w-56 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg p-1.5 text-xs text-slate-800 dark:text-slate-200 space-y-0.5">
+            <div className="px-2.5 py-1.5 text-[11px] font-semibold text-slate-400 border-b border-slate-100 dark:border-slate-800 truncate">
+              {activePageObj.title} ({activePageIndex + 1}/{pages.length})
+            </div>
+            <button
+              type="button"
+              onClick={() => startRenamePage(activePageObj)}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-left"
+            >
+              <Pencil className="w-3.5 h-3.5 text-slate-400" />
+              Rename Page
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowPageMenu(false);
+                onDuplicatePage(activePageObj.id);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-left"
+            >
+              <Copy className="w-3.5 h-3.5 text-slate-400" />
+              Duplicate Page
+            </button>
+            {pages.length > 1 && (
+              <div className="grid grid-cols-2 gap-1 pt-0.5">
+                <button
+                  type="button"
+                  disabled={activePageIndex === 0}
+                  onClick={() => {
+                    onMovePage(activePageObj.id, -1);
+                    setShowPageMenu(false);
+                  }}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  Move Left
+                </button>
+                <button
+                  type="button"
+                  disabled={activePageIndex === pages.length - 1}
+                  onClick={() => {
+                    onMovePage(activePageObj.id, 1);
+                    setShowPageMenu(false);
+                  }}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35"
+                >
+                  Move Right
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
+            {hasSelection && pages.length > 1 && (
+              <div className="pt-1 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-0.5">
+                <div className="px-2.5 py-1 text-[11px] font-medium text-slate-400 flex items-center gap-1.5">
+                  <FolderInput className="w-3 h-3" />
+                  Move Selection To
+                </div>
+                {pages
+                  .filter((p) => p.id !== activePageObj.id)
+                  .map((targetPg) => (
+                    <button
+                      key={targetPg.id}
+                      type="button"
+                      onClick={() => {
+                        setShowPageMenu(false);
+                        onMoveSelectionToPage(targetPg.id);
+                      }}
+                      className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-950/40 text-left text-blue-600 dark:text-blue-400"
+                    >
+                      <span className="truncate">{targetPg.title}</span>
+                      <ChevronRight className="w-3 h-3 shrink-0" />
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {pages.length > 1 && (
+              <div className="pt-1 mt-1 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPageMenu(false);
+                    onDeletePage(activePageObj.id);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 text-left"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Page
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Main Canvas Area */}
+      <div ref={containerRef} className="relative flex-1 min-h-0 overflow-hidden">
+        {/* Main 60fps HTML5 Canvas */}
+        <canvas
+          ref={canvasRef}
+          onWheel={handleWheel}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUpOrCancel}
+          onPointerCancel={handlePointerUpOrCancel}
+          onPointerLeave={() => {
+            pointerWorldRef.current = null;
+          }}
         className={`w-full h-full block touch-none ${
           tool === 'select' ? 'cursor-default' : 'cursor-crosshair'
         }`}
@@ -2035,6 +2300,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           />
         </div>
       )}
+      </div>
     </div>
   );
 };

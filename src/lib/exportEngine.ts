@@ -7,6 +7,7 @@ export function exportLinkDrawJSON(doc: GraphDocument, title: string): string {
       format: 'linkdraw-v2',
       title,
       exportedAt: new Date().toISOString(),
+      pages: doc.pages ?? [{ id: 'page_1', title: 'Page 1', order: 0 }],
       nodes: doc.nodes,
       conns: doc.edges,
       sticky_notes: doc.stickies,
@@ -21,6 +22,7 @@ export function exportLinkDrawJSON(doc: GraphDocument, title: string): string {
 
 export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDocument } {
   const parsed = JSON.parse(raw) as Record<string, unknown>;
+  const rawPages = Array.isArray(parsed.pages) ? parsed.pages : [];
   const rawNodes = Array.isArray(parsed.nodes) ? parsed.nodes : [];
   const rawEdges = Array.isArray(parsed.conns)
     ? parsed.conns
@@ -82,8 +84,18 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     return Date.now();
   };
 
+  const pages = rawPages.length > 0
+    ? rawPages.map((pg: Record<string, unknown>, idx) => ({
+        id: sanitizeId(pg.id, `page_${idx + 1}`),
+        title: String(pg.title ?? `Page ${idx + 1}`).slice(0, 120),
+        order: typeof pg.order === 'number' && Number.isFinite(pg.order) ? pg.order : idx,
+        createdAt: toTimestampMs(pg.createdAt ?? pg.createdAtMs ?? pg.created_at),
+      }))
+    : [{ id: 'page_1', title: 'Page 1', order: 0, createdAt: Date.now() }];
+
   const nodes: GraphNode[] = rawNodes.map((n: Record<string, unknown>, idx) => ({
     id: sanitizeId(n.id, `n_${idx}`),
+    pageId: n.pageId || n.page_id ? sanitizeId(n.pageId ?? n.page_id, 'page_1') : undefined,
     x: Number(n.x ?? 0),
     y: Number(n.y ?? 0),
     w: Number(n.w ?? 140),
@@ -112,6 +124,7 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
 
   const edges: GraphEdge[] = rawEdges.map((e: Record<string, unknown>, idx) => ({
     id: sanitizeId(e.id, `e_${idx}`),
+    pageId: e.pageId || e.page_id ? sanitizeId(e.pageId ?? e.page_id, 'page_1') : undefined,
     a: sanitizeId(e.a, ''),
     b: sanitizeId(e.b, ''),
     label: String(e.label ?? ''),
@@ -132,6 +145,7 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
 
   const stickies = rawStickies.map((s: Record<string, unknown>, idx) => ({
     id: sanitizeId(s.id, `s_${idx}`),
+    pageId: s.pageId || s.page_id ? sanitizeId(s.pageId ?? s.page_id, 'page_1') : undefined,
     x: Number(s.x ?? 0),
     y: Number(s.y ?? 0),
     w: Number(s.w ?? 170),
@@ -145,6 +159,7 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
 
   const strokes = rawStrokes.map((st: Record<string, unknown>, idx) => ({
     id: sanitizeId(st.id, `st_${idx}`),
+    pageId: st.pageId || st.page_id ? sanitizeId(st.pageId ?? st.page_id, 'page_1') : undefined,
     points: Array.isArray(st.points)
       ? st.points.map((pt) =>
           Array.isArray(pt)
@@ -167,6 +182,7 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
   return {
     title: parsed.title ? String(parsed.title) : undefined,
     graph: {
+      pages,
       nodes,
       edges,
       stickies,

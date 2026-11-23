@@ -47,10 +47,10 @@
     },
     "BoardElement": {
       "title": "BoardElement",
-      "description": "Collaborative graph element (node, edge, sticky, stroke) stored in board subcollection",
+      "description": "Collaborative graph element (node, edge, sticky, stroke, page) stored in board subcollection",
       "type": "object",
       "properties": {
-        "kind": { "type": "string", "enum": ["node", "edge", "sticky", "stroke"] },
+        "kind": { "type": "string", "enum": ["node", "edge", "sticky", "stroke", "page"] },
         "payload": { "type": "object" },
         "updatedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "updatedByName": { "type": "string", "minLength": 1, "maxLength": 120 },

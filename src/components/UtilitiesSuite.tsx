@@ -63,6 +63,7 @@ interface UtilitiesSuiteProps {
   onSubTabChange: (tab: UtilitySubTab) => void;
   boardTitle: string;
   graph: GraphDocument;
+  fullGraph?: GraphDocument;
   theme: ThemeMode;
   userId: string;
   userEmail: string;
@@ -80,6 +81,7 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
   onSubTabChange,
   boardTitle,
   graph,
+  fullGraph,
   theme,
   userId,
   userEmail,
@@ -379,7 +381,7 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
     let mime = 'application/json';
 
     if (fmt === 'json') {
-      content = exportLinkDrawJSON(graph, boardTitle);
+      content = exportLinkDrawJSON(fullGraph ?? graph, boardTitle);
     } else if (fmt === 'svg') {
       content = exportSVG(graph);
       filename = `${slug}.svg`;

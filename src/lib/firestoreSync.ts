@@ -24,12 +24,20 @@ import type {
   GraphDocument,
   GraphEdge,
   GraphNode,
+  GraphPage,
   NoteRecord,
   StickyNote,
   WorkspaceBoard,
 } from '../types/linkdraw';
 import { db, handleFirestoreError, OperationType } from './firebase';
-import { DEFAULT_LAYERS, DEFAULT_SETTINGS } from './templates';
+import {
+  DEFAULT_LAYERS,
+  DEFAULT_PAGE_ID,
+  DEFAULT_SETTINGS,
+  hasCustomPages,
+  makeDefaultPages,
+  normalizePages,
+} from './templates';
 
 export function makeSafeId(prefix = 'id'): string {
   const rand = Math.random().toString(36).slice(2, 10);
@@ -111,6 +119,9 @@ export function encodeNodePayload(node: GraphNode): Record<string, unknown> {
     updatedAtMs: finiteNum(node.updatedAt, Date.now()),
   };
 
+  if (node.pageId && node.pageId !== DEFAULT_PAGE_ID) {
+    payload.pageId = sanitizeElementId(node.pageId, 'pg');
+  }
   if (node.textColor) payload.textColor = String(node.textColor);
   if (node.tableData) {
     payload.tableHeaders = (node.tableData.headers ?? []).slice(0, 15).map(String);
@@ -152,8 +163,11 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
   const rawTextColor = p.textColor ?? p.text_color;
   const rawIconPosition = p.iconPosition ?? p.icon_position ?? 'inline';
 
+  const rawPageId = p.pageId ?? p.page_id;
+
   return {
     id: String(p.id ?? id),
+    ...(rawPageId ? { pageId: String(rawPageId) } : {}),
     x: Number(p.x ?? 0),
     y: Number(p.y ?? 0),
     w: Number(p.w ?? 140),
@@ -191,7 +205,7 @@ export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
       ? Math.round(Number(edge.curvature) * 10) / 10
       : null;
 
-  return {
+  const payload: Record<string, unknown> = {
     id: String(edge.id),
     a: String(edge.a),
     b: String(edge.b),
@@ -207,6 +221,10 @@ export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
     createdAtMs: finiteNum(edge.createdAt, Date.now()),
     updatedAtMs: finiteNum(edge.updatedAt, Date.now()),
   };
+  if (edge.pageId && edge.pageId !== DEFAULT_PAGE_ID) {
+    payload.pageId = sanitizeElementId(edge.pageId, 'pg');
+  }
+  return payload;
 }
 
 export function decodeEdgePayload(id: string, p: Record<string, unknown>): GraphEdge {
@@ -217,9 +235,11 @@ export function decodeEdgePayload(id: string, p: Record<string, unknown>): Graph
     Number.isFinite(Number(rawCurvature))
       ? Number(rawCurvature)
       : null;
+  const rawPageId = p.pageId ?? p.page_id;
 
   return {
     id: String(p.id ?? id),
+    ...(rawPageId ? { pageId: String(rawPageId) } : {}),
     a: String(p.a ?? ''),
     b: String(p.b ?? ''),
     label: String(p.label ?? ''),
@@ -237,7 +257,7 @@ export function decodeEdgePayload(id: string, p: Record<string, unknown>): Graph
 }
 
 export function encodeStickyPayload(sticky: StickyNote): Record<string, unknown> {
-  return {
+  const payload: Record<string, unknown> = {
     id: String(sticky.id),
     x: Math.round(finiteNum(sticky.x, 0) * 100) / 100 || 0,
     y: Math.round(finiteNum(sticky.y, 0) * 100) / 100 || 0,
@@ -249,11 +269,17 @@ export function encodeStickyPayload(sticky: StickyNote): Record<string, unknown>
     createdAtMs: finiteNum(sticky.createdAt, Date.now()),
     updatedAtMs: finiteNum(sticky.updatedAt, Date.now()),
   };
+  if (sticky.pageId && sticky.pageId !== DEFAULT_PAGE_ID) {
+    payload.pageId = sanitizeElementId(sticky.pageId, 'pg');
+  }
+  return payload;
 }
 
 export function decodeStickyPayload(id: string, p: Record<string, unknown>): StickyNote {
+  const rawPageId = p.pageId ?? p.page_id;
   return {
     id: String(p.id ?? id),
+    ...(rawPageId ? { pageId: String(rawPageId) } : {}),
     x: Number(p.x ?? 0),
     y: Number(p.y ?? 0),
     w: Number(p.w ?? 170),
@@ -271,7 +297,7 @@ export function encodeStrokePayload(stroke: FreehandStroke): Record<string, unkn
   const pts = stroke.points.length > 250
     ? stroke.points.filter((_, idx) => idx % 2 === 0 || idx === stroke.points.length - 1)
     : stroke.points;
-  return {
+  const payload: Record<string, unknown> = {
     id: String(stroke.id),
     points: pts.map((pt) => ({
       x: Math.round(finiteNum(pt.x, 0) * 10) / 10 || 0,
@@ -283,11 +309,17 @@ export function encodeStrokePayload(stroke: FreehandStroke): Record<string, unkn
     layer: stroke.layer ?? 'Annotations',
     createdAtMs: finiteNum(stroke.createdAt, Date.now()),
   };
+  if (stroke.pageId && stroke.pageId !== DEFAULT_PAGE_ID) {
+    payload.pageId = sanitizeElementId(stroke.pageId, 'pg');
+  }
+  return payload;
 }
 
 export function decodeStrokePayload(id: string, p: Record<string, unknown>): FreehandStroke {
+  const rawPageId = p.pageId ?? p.page_id;
   return {
     id: String(p.id ?? id),
+    ...(rawPageId ? { pageId: String(rawPageId) } : {}),
     points: Array.isArray(p.points)
       ? p.points.map((pt) =>
           Array.isArray(pt)
@@ -302,6 +334,24 @@ export function decodeStrokePayload(id: string, p: Record<string, unknown>): Fre
     width: Number(p.width ?? 3),
     tool: p.tool === 'highlight' ? 'highlight' : 'pen',
     layer: (p.layer as FreehandStroke['layer']) ?? 'Annotations',
+    createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
+  };
+}
+
+export function encodePagePayload(page: GraphPage, order: number): Record<string, unknown> {
+  return {
+    id: sanitizeElementId(page.id, 'page'),
+    title: String(page.title || `Page ${order + 1}`).slice(0, 120),
+    order: finiteNum(page.order, order),
+    createdAtMs: finiteNum(page.createdAt, Date.now()),
+  };
+}
+
+export function decodePagePayload(id: string, p: Record<string, unknown>): GraphPage {
+  return {
+    id: String(p.id ?? id),
+    title: String(p.title ?? 'Untitled Page'),
+    order: Number(p.order ?? 0),
     createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
   };
 }
@@ -374,6 +424,10 @@ export function subscribePersonalBoards(
             ? rawGraph.freehand_strokes
             : [];
 
+          const rawPages = Array.isArray(rawGraph.pages) ? rawGraph.pages : [];
+          const pages = normalizePages(
+            rawPages.map((pg, i) => decodePagePayload(`page_${i + 1}`, pg as Record<string, unknown>))
+          );
           const nodes = rawNodes.map((n, i) => decodeNodePayload(`n_${i}`, n as Record<string, unknown>));
           const edges = rawEdges.map((e, i) => decodeEdgePayload(`e_${i}`, e as Record<string, unknown>));
           const stickies = rawStickies.map((s, i) => decodeStickyPayload(`s_${i}`, s as Record<string, unknown>));
@@ -402,7 +456,7 @@ export function subscribePersonalBoards(
             flowAnimation: settings.flowAnimation,
             createdAt: toMillis(data.createdAt ?? data.created_at),
             updatedAt: toMillis(data.updatedAt ?? data.updated_at),
-            graphData: { nodes, edges, stickies, strokes, layers, settings },
+            graphData: { pages, nodes, edges, stickies, strokes, layers, settings },
           };
         })
         .sort((a, b) => b.updatedAt - a.updatedAt);
@@ -420,6 +474,7 @@ export async function fetchCollabBoardGraph(board: WorkspaceBoard): Promise<Grap
     const edges: GraphEdge[] = [];
     const stickies: StickyNote[] = [];
     const strokes: FreehandStroke[] = [];
+    const rawPages: GraphPage[] = [];
     for (const d of snap.docs) {
       const data = d.data();
       const kind = String(data.kind ?? '');
@@ -428,8 +483,10 @@ export async function fetchCollabBoardGraph(board: WorkspaceBoard): Promise<Grap
       else if (kind === 'edge') edges.push(decodeEdgePayload(d.id, payload));
       else if (kind === 'sticky') stickies.push(decodeStickyPayload(d.id, payload));
       else if (kind === 'stroke') strokes.push(decodeStrokePayload(d.id, payload));
+      else if (kind === 'page') rawPages.push(decodePagePayload(d.id, payload));
     }
     return {
+      pages: rawPages.length > 0 ? normalizePages(rawPages) : makeDefaultPages(),
       nodes,
       edges,
       stickies,
@@ -544,6 +601,22 @@ export async function createCollabBoard(
       },
     });
   }
+  if (hasCustomPages(initialGraph.pages)) {
+    const pages = normalizePages(initialGraph.pages);
+    pages.forEach((pg, idx) => {
+      initialWrites.push({
+        docId: sanitizeElementId(`pgdoc_${pg.id}`, 'pg'),
+        data: {
+          kind: 'page',
+          payload: encodePagePayload(pg, idx),
+          updatedByUid: uid,
+          updatedByName: safeName,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+      });
+    });
+  }
 
   try {
     for (let i = 0; i < initialWrites.length; i += 400) {
@@ -586,7 +659,9 @@ export async function createPersonalBoard(
   const safeTitle = (title.trim() || 'Untitled Personal Board').slice(0, 160);
   const safeDesc = description.trim().slice(0, 1000);
   const path = `users/${uid}/personal_boards/${boardId}`;
+  const pages = normalizePages(graph.pages);
   const encodedGraph = {
+    pages: pages.map((pg, idx) => encodePagePayload(pg, idx)),
     nodes: graph.nodes.map(encodeNodePayload),
     edges: graph.edges.map(encodeEdgePayload),
     stickies: graph.stickies.map(encodeStickyPayload),
@@ -620,7 +695,7 @@ export async function createPersonalBoard(
     flowAnimation: graph.settings.flowAnimation,
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    graphData: graph,
+    graphData: { ...graph, pages },
   };
 }
 
@@ -632,11 +707,13 @@ export async function savePersonalBoardGraph(
   graph: GraphDocument
 ): Promise<void> {
   const path = `users/${uid}/personal_boards/${boardId}`;
+  const pages = normalizePages(graph.pages);
   try {
     await updateDoc(doc(db, path), {
       title: title.slice(0, 160),
       description: description.slice(0, 1000),
       graphData: {
+        pages: pages.map((pg, idx) => encodePagePayload(pg, idx)),
         nodes: graph.nodes.map(encodeNodePayload),
         edges: graph.edges.map(encodeEdgePayload),
         stickies: graph.stickies.map(encodeStickyPayload),
@@ -849,12 +926,26 @@ export function buildCollabMetaFromGraph(graph: GraphDocument): Map<string, Coll
       createdAtTs: null,
     });
   }
+  if (hasCustomPages(graph.pages)) {
+    const pages = normalizePages(graph.pages);
+    pages.forEach((pg, idx) => {
+      const payload = encodePagePayload(pg, idx);
+      meta.set(`page::${pg.id}`, {
+        docId: sanitizeElementId(`pgdoc_${pg.id}`, 'pg'),
+        hash: stableStringify({ kind: 'page', payload }),
+        existsOnServer: true,
+        canonical: true,
+        createdAtTs: null,
+      });
+    });
+  }
   return meta;
 }
 
 export function subscribeCollabElements(
   boardId: string,
   onChange: (elements: {
+    pages: GraphPage[];
     nodes: GraphNode[];
     edges: GraphEdge[];
     stickies: StickyNote[];
@@ -870,6 +961,7 @@ export function subscribeCollabElements(
       const edges: GraphEdge[] = [];
       const stickies: StickyNote[] = [];
       const strokes: FreehandStroke[] = [];
+      const rawPages: GraphPage[] = [];
       const elementMeta = new Map<string, CollabElementMeta>();
 
       for (const d of snap.docs) {
@@ -919,10 +1011,24 @@ export function subscribeCollabElements(
             canonical,
             createdAtTs,
           });
+        } else if (kind === 'page') {
+          const decoded = decodePagePayload(d.id, payload);
+          rawPages.push(decoded);
+          elementMeta.set(`page::${decoded.id}`, {
+            docId: d.id,
+            hash: stableStringify({
+              kind: 'page',
+              payload: encodePagePayload(decoded, decoded.order ?? 0),
+            }),
+            existsOnServer: true,
+            canonical,
+            createdAtTs,
+          });
         }
       }
 
-      onChange({ nodes, edges, stickies, strokes, elementMeta });
+      const pages = rawPages.length > 0 ? normalizePages(rawPages) : makeDefaultPages();
+      onChange({ pages, nodes, edges, stickies, strokes, elementMeta });
     },
     (err) => handleFirestoreError(err, OperationType.LIST, path)
   );
@@ -946,7 +1052,12 @@ export async function syncCollabElementDiff(
 
   const nextEntries = new Map<
     string,
-    { kind: 'node' | 'edge' | 'sticky' | 'stroke'; payload: Record<string, unknown>; hash: string }
+    {
+      kind: 'node' | 'edge' | 'sticky' | 'stroke' | 'page';
+      payload: Record<string, unknown>;
+      hash: string;
+      preferredDocId?: string;
+    }
   >();
 
   for (const n of graph.nodes) {
@@ -965,10 +1076,26 @@ export async function syncCollabElementDiff(
     const payload = encodeStrokePayload(st);
     nextEntries.set(st.id, { kind: 'stroke', payload, hash: stableStringify({ kind: 'stroke', payload }) });
   }
+  if (hasCustomPages(graph.pages)) {
+    const pages = normalizePages(graph.pages);
+    pages.forEach((pg, idx) => {
+      const payload = encodePagePayload(pg, idx);
+      nextEntries.set(`page::${pg.id}`, {
+        kind: 'page',
+        payload,
+        hash: stableStringify({ kind: 'page', payload }),
+        preferredDocId: sanitizeElementId(`pgdoc_${pg.id}`, 'pg'),
+      });
+    });
+  }
 
   const nextMeta = new Map<string, CollabElementMeta>();
   const ops: QueuedElementWrite[] = [];
-  const unknownEntries: { id: string; docId: string; entry: { kind: 'node' | 'edge' | 'sticky' | 'stroke'; payload: Record<string, unknown>; hash: string } }[] = [];
+  const unknownEntries: {
+    id: string;
+    docId: string;
+    entry: { kind: 'node' | 'edge' | 'sticky' | 'stroke' | 'page'; payload: Record<string, unknown>; hash: string };
+  }[] = [];
 
   for (const [id, entry] of nextEntries.entries()) {
     const prev = lastSyncedMeta.get(id);
@@ -977,7 +1104,7 @@ export async function syncCollabElementDiff(
       continue;
     }
 
-    const docId = prev?.docId ?? sanitizeElementId(id, entry.kind);
+    const docId = prev?.docId ?? entry.preferredDocId ?? sanitizeElementId(id, entry.kind);
     if (!prev || !prev.existsOnServer) {
       unknownEntries.push({ id, docId, entry });
     } else if (prev.canonical) {
