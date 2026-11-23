@@ -11,66 +11,58 @@ export interface EdgeGeometry {
   startAngle: number;
   endAngle: number;
   isSelfLoop: boolean;
+  curveHandlePos?: Point;
+  controlPoint?: Point;
+  effectiveCurvature?: number;
 }
 
-/**
- * Returns shape-aware safe inner text width/height ratios so text never clips or overlaps borders.
- */
 export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: number; offsetY: number } {
-  const w = node.w;
-  const h = node.h;
+  const padW = Math.max(24, node.w - 22);
+  const padH = Math.max(18, node.h - 16);
   switch (node.shape) {
     case 'circle':
-      return { maxW: w * 0.68, maxH: h * 0.68, offsetY: 0 };
+      return { maxW: Math.max(24, node.w * 0.72), maxH: Math.max(18, node.h * 0.72), offsetY: 0 };
     case 'diamond':
-      return { maxW: w * 0.52, maxH: h * 0.52, offsetY: 0 };
+      return { maxW: Math.max(24, node.w * 0.56), maxH: Math.max(18, node.h * 0.56), offsetY: 0 };
     case 'triangle':
-      return { maxW: w * 0.52, maxH: h * 0.45, offsetY: h * 0.14 };
-    case 'star':
-      return { maxW: w * 0.48, maxH: h * 0.46, offsetY: 0.04 * h };
+      return { maxW: Math.max(24, node.w * 0.54), maxH: Math.max(18, node.h * 0.5), offsetY: node.h * 0.14 };
     case 'hexagon':
-      return { maxW: w * 0.72, maxH: h * 0.76, offsetY: 0 };
-    case 'cylinder':
-      return { maxW: w * 0.82, maxH: h * 0.64, offsetY: h * 0.07 };
-    case 'cloud':
-      return { maxW: w * 0.7, maxH: h * 0.58, offsetY: h * 0.03 };
+      return { maxW: Math.max(24, node.w * 0.68), maxH: Math.max(18, node.h * 0.76), offsetY: 0 };
+    case 'star':
+      return { maxW: Math.max(24, node.w * 0.44), maxH: Math.max(18, node.h * 0.44), offsetY: node.h * 0.04 };
     case 'callout':
-      return { maxW: w * 0.84, maxH: h * 0.66, offsetY: -h * 0.07 };
+      return { maxW: padW, maxH: Math.max(18, node.h * 0.54), offsetY: -node.h * 0.16 };
+    case 'cylinder':
+      return { maxW: padW, maxH: Math.max(18, node.h * 0.66), offsetY: node.h * 0.08 };
     case 'parallelogram':
-      return { maxW: w * 0.68, maxH: h * 0.76, offsetY: 0 };
+      return { maxW: Math.max(24, node.w * 0.68), maxH: padH, offsetY: 0 };
+    case 'cloud':
+      return { maxW: Math.max(24, node.w * 0.66), maxH: Math.max(18, node.h * 0.54), offsetY: 0 };
     default:
-      return { maxW: w * 0.86, maxH: h * 0.8, offsetY: 0 };
+      return { maxW: padW, maxH: padH, offsetY: 0 };
   }
 }
 
-/**
- * Computes the exact intersection point on the outer perimeter of a node's shape
- * along the ray from node center (nx, ny) toward (fromX, fromY).
- */
 export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: number): Point {
   const cx = node.x;
   const cy = node.y;
-  const dx = fromX - cx;
-  const dy = fromY - cy;
-  const dist = Math.hypot(dx, dy);
-  if (dist < 1e-4) {
-    return { x: cx, y: cy - node.h / 2 };
-  }
-  const ux = dx / dist;
-  const uy = dy / dist;
   const hw = node.w / 2;
   const hh = node.h / 2;
+  const dx = fromX - cx;
+  const dy = fromY - cy;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return { x: cx, y: cy };
+  const ux = dx / len;
+  const uy = dy / len;
 
   switch (node.shape) {
     case 'circle': {
-      const rx = hw;
-      const ry = hh;
-      const denom = Math.hypot(ux / rx, uy / ry);
+      const denom = Math.hypot(ux / Math.max(1, hw), uy / Math.max(1, hh)) || 1;
       return { x: cx + ux / denom, y: cy + uy / denom };
     }
     case 'diamond': {
-      const t = 1 / (Math.abs(ux) / hw + Math.abs(uy) / hh);
-      return { x: cx + ux * t, y: cy + uy * t };
+      const denom = (Math.abs(ux) / Math.max(1, hw) + Math.abs(uy) / Math.max(1, hh)) || 1;
+      return { x: cx + ux / denom, y: cy + uy / denom };
     }
     case 'triangle': {
       const poly: Point[] = [
@@ -81,7 +73,7 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
       return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
     }
     case 'hexagon': {
-      const inset = Math.min(hw * 0.28, 22);
+      const inset = hw * 0.3;
       const poly: Point[] = [
         { x: cx - hw + inset, y: cy - hh },
         { x: cx + hw - inset, y: cy - hh },
@@ -92,26 +84,9 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
       ];
       return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
     }
-    case 'parallelogram': {
-      const skew = Math.min(hw * 0.25, 20);
-      const poly: Point[] = [
-        { x: cx - hw + skew, y: cy - hh },
-        { x: cx + hw, y: cy - hh },
-        { x: cx + hw - skew, y: cy + hh },
-        { x: cx - hw, y: cy + hh },
-      ];
-      return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
-    }
     case 'star': {
       const poly = getStarPolygon(cx, cy, hw, hh);
       return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
-    }
-    case 'callout': {
-      const bodyH = hh * 0.78;
-      return rectIntersect(cx, cy - (hh - bodyH) * 0.3, hw, bodyH, ux, uy);
-    }
-    case 'cloud': {
-      return rectIntersect(cx, cy, hw * 0.94, hh * 0.88, ux, uy);
     }
     default:
       return rectIntersect(cx, cy, hw, hh, ux, uy);
@@ -125,26 +100,20 @@ function rectIntersect(cx: number, cy: number, hw: number, hh: number, ux: numbe
   return { x: cx + ux * t, y: cy + uy * t };
 }
 
-function intersectRayPolygon(
-  cx: number,
-  cy: number,
-  ux: number,
-  uy: number,
-  poly: Point[]
-): Point | null {
+function intersectRayPolygon(cx: number, cy: number, ux: number, uy: number, poly: Point[]): Point | null {
   let bestT = Infinity;
   for (let i = 0; i < poly.length; i++) {
-    const p1 = poly[i];
-    const p2 = poly[(i + 1) % poly.length];
-    const ex = p2.x - p1.x;
-    const ey = p2.y - p1.y;
-    const denom = ux * ey - uy * ex;
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    const sx = b.x - a.x;
+    const sy = b.y - a.y;
+    const denom = ux * sy - uy * sx;
     if (Math.abs(denom) < 1e-6) continue;
-    const dx = p1.x - cx;
-    const dy = p1.y - cy;
-    const t = (dx * ey - dy * ex) / denom;
-    const u = (dx * uy - dy * ux) / denom;
-    if (t > 0 && u >= -1e-4 && u <= 1 + 1e-4 && t < bestT) {
+    const qpx = a.x - cx;
+    const qpy = a.y - cy;
+    const t = (qpx * sy - qpy * sx) / denom;
+    const u = (qpx * uy - qpy * ux) / denom;
+    if (t >= 0 && u >= -1e-4 && u <= 1 + 1e-4 && t < bestT) {
       bestT = t;
     }
   }
@@ -156,34 +125,62 @@ export function getStarPolygon(cx: number, cy: number, rx: number, ry: number): 
   const pts: Point[] = [];
   for (let i = 0; i < 10; i++) {
     const angle = -Math.PI / 2 + (i * Math.PI) / 5;
-    const factor = i % 2 === 0 ? 1 : 0.46;
+    const scale = i % 2 === 0 ? 1 : 0.46;
     pts.push({
-      x: cx + Math.cos(angle) * rx * factor,
-      y: cy + Math.sin(angle) * ry * factor,
+      x: cx + Math.cos(angle) * rx * scale,
+      y: cy + Math.sin(angle) * ry * scale,
     });
   }
   return pts;
 }
 
-/**
- * Computes parallel edge bundling offsets so multiple edges between the same pair don't collide.
- */
 export function computeParallelEdgeIndexMap(edges: GraphEdge[]): Map<string, { index: number; total: number }> {
   const groups = new Map<string, GraphEdge[]>();
-  for (const e of edges) {
-    if (e.a === e.b) continue;
-    const key = e.a < e.b ? `${e.a}::${e.b}` : `${e.b}::${e.a}`;
+  for (const edge of edges) {
+    if (edge.a === edge.b) continue;
+    const key = edge.a < edge.b ? `${edge.a}::${edge.b}` : `${edge.b}::${edge.a}`;
     const list = groups.get(key) ?? [];
-    list.push(e);
+    list.push(edge);
     groups.set(key, list);
   }
   const result = new Map<string, { index: number; total: number }>();
   for (const list of groups.values()) {
-    list.forEach((e, idx) => {
-      result.set(e.id, { index: idx, total: list.length });
+    const total = list.length;
+    list.forEach((edge, index) => {
+      result.set(edge.id, { index, total });
     });
   }
   return result;
+}
+
+/**
+ * Computes signed edge curvature (control-point perpendicular offset in world px)
+ * from a world drag point (wx, wy) so the curve passes through (wx, wy) at t = 0.5.
+ */
+export function computeEdgeCurvatureFromPoint(
+  src: GraphNode,
+  dst: GraphNode,
+  wx: number,
+  wy: number
+): number {
+  if (src.id === dst.id) {
+    const dy = wy - src.y;
+    const hh = src.h / 2;
+    const dir = dy >= 0 ? -1 : 1; // negative curvature flips loop below node
+    const distPastBoundary = Math.max(28, Math.min(260, Math.abs(dy) - hh + 12));
+    return Math.round(dir * distPastBoundary);
+  }
+  const dx = dst.x - src.x;
+  const dy = dst.y - src.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const mx = (src.x + dst.x) / 2;
+  const my = (src.y + dst.y) / 2;
+  const signedDist = (wx - mx) * nx + (wy - my) * ny;
+  const raw = Math.round(signedDist * 2);
+  if (Math.abs(raw) <= 6) return 0;
+  return Math.max(-350, Math.min(350, raw));
 }
 
 export function computeEdgeGeometry(
@@ -195,20 +192,38 @@ export function computeEdgeGeometry(
   const dst = nodeMap.get(edge.b);
   if (!src || !dst) return null;
 
+  const hasCustomCurvature =
+    edge.curvature !== undefined &&
+    edge.curvature !== null &&
+    Number.isFinite(Number(edge.curvature));
+
   // Self-loop geometry
   if (src.id === dst.id) {
     const hh = src.h / 2;
     const hw = src.w / 2;
-    const p0 = { x: src.x - Math.min(18, hw * 0.35), y: src.y - hh };
-    const p1 = { x: src.x - 42, y: src.y - hh - 64 };
-    const p2 = { x: src.x + 42, y: src.y - hh - 64 };
-    const p3 = { x: src.x + Math.min(18, hw * 0.35), y: src.y - hh };
+    const signed = hasCustomCurvature ? Number(edge.curvature) : 64;
+    const dir = signed < 0 ? 1 : -1;
+    const reach = Math.max(28, Math.min(260, Math.abs(signed) || 64));
+    const spread = Math.max(36, reach * 0.65);
+    const anchorY = dir < 0 ? src.y - hh : src.y + hh;
+    const p0 = { x: src.x - Math.min(18, hw * 0.35), y: anchorY };
+    const p1 = { x: src.x - spread, y: anchorY + dir * reach };
+    const p2 = { x: src.x + spread, y: anchorY + dir * reach };
+    const p3 = { x: src.x + Math.min(18, hw * 0.35), y: anchorY };
     const points = sampleCubicBezier(p0, p1, p2, p3, 24);
     const labelPos = points[Math.floor(points.length / 2)];
     const startAngle = Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x);
     const n = points.length;
     const endAngle = Math.atan2(points[n - 1].y - points[n - 2].y, points[n - 1].x - points[n - 2].x);
-    return { points, labelPos, startAngle, endAngle, isSelfLoop: true };
+    return {
+      points,
+      labelPos,
+      startAngle,
+      endAngle,
+      isSelfLoop: true,
+      curveHandlePos: labelPos,
+      effectiveCurvature: dir < 0 ? reach : -reach,
+    };
   }
 
   const dx = dst.x - src.x;
@@ -225,9 +240,12 @@ export function computeEdgeGeometry(
       ? (index - (total - 1) / 2) * Math.max(26, 56 / Math.sqrt(total)) * canonicalFlip
       : 0;
 
-  if (edge.type === 'curved' || total > 1) {
-    const curveBase = edge.type === 'curved' ? Math.min(48, len * 0.16) * (total > 1 ? 0 : 1) : 0;
-    const offset = bundleOffset !== 0 ? bundleOffset : curveBase;
+  if (edge.type === 'curved' || (total > 1 && edge.type === 'straight')) {
+    const defaultOffset =
+      bundleOffset !== 0 ? bundleOffset : edge.type === 'curved' ? Math.min(48, len * 0.16) : 0;
+    const offset = hasCustomCurvature
+      ? Math.max(-350, Math.min(350, Number(edge.curvature)))
+      : defaultOffset;
     const ctrl = {
       x: (src.x + dst.x) / 2 + nx * offset,
       y: (src.y + dst.y) / 2 + ny * offset,
@@ -239,7 +257,16 @@ export function computeEdgeGeometry(
     const n = points.length;
     const startAngle = Math.atan2(points[1].y - points[0].y, points[1].x - points[0].x);
     const endAngle = Math.atan2(points[n - 1].y - points[n - 2].y, points[n - 1].x - points[n - 2].x);
-    return { points, labelPos: mid, startAngle, endAngle, isSelfLoop: false };
+    return {
+      points,
+      labelPos: mid,
+      startAngle,
+      endAngle,
+      isSelfLoop: false,
+      curveHandlePos: mid,
+      controlPoint: ctrl,
+      effectiveCurvature: offset,
+    };
   }
 
   if (edge.type === 'elbow') {
@@ -274,7 +301,15 @@ export function computeEdgeGeometry(
   const points = [startPt, endPt];
   const labelPos = { x: (startPt.x + endPt.x) / 2, y: (startPt.y + endPt.y) / 2 };
   const angle = Math.atan2(endPt.y - startPt.y, endPt.x - startPt.x);
-  return { points, labelPos, startAngle: angle, endAngle: angle, isSelfLoop: false };
+  return {
+    points,
+    labelPos,
+    startAngle: angle,
+    endAngle: angle,
+    isSelfLoop: false,
+    curveHandlePos: labelPos,
+    effectiveCurvature: 0,
+  };
 }
 
 function sampleQuadraticBezier(p0: Point, p1: Point, p2: Point, steps: number): Point[] {

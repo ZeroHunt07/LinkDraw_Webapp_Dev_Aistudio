@@ -184,6 +184,13 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
 }
 
 export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
+  const safeCurvature =
+    edge.curvature !== undefined &&
+    edge.curvature !== null &&
+    Number.isFinite(Number(edge.curvature))
+      ? Math.round(Number(edge.curvature) * 10) / 10
+      : null;
+
   return {
     id: String(edge.id),
     a: String(edge.a),
@@ -195,6 +202,7 @@ export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
     type: edge.type ?? 'curved',
     lineStyle: edge.lineStyle ?? 'solid',
     weight: finiteNum(edge.weight, 1),
+    curvature: safeCurvature,
     layer: edge.layer ?? 'Data',
     createdAtMs: finiteNum(edge.createdAt, Date.now()),
     updatedAtMs: finiteNum(edge.updatedAt, Date.now()),
@@ -202,6 +210,14 @@ export function encodeEdgePayload(edge: GraphEdge): Record<string, unknown> {
 }
 
 export function decodeEdgePayload(id: string, p: Record<string, unknown>): GraphEdge {
+  const rawCurvature = p.curvature;
+  const curvature =
+    rawCurvature !== undefined &&
+    rawCurvature !== null &&
+    Number.isFinite(Number(rawCurvature))
+      ? Number(rawCurvature)
+      : null;
+
   return {
     id: String(p.id ?? id),
     a: String(p.a ?? ''),
@@ -213,6 +229,7 @@ export function decodeEdgePayload(id: string, p: Record<string, unknown>): Graph
     type: (p.type as GraphEdge['type']) ?? 'curved',
     lineStyle: ((p.lineStyle ?? p.line_style) as GraphEdge['lineStyle']) ?? 'solid',
     weight: Number(p.weight ?? 1),
+    curvature,
     layer: (p.layer as GraphEdge['layer']) ?? 'Data',
     createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
     updatedAt: toMillis(p.updatedAtMs ?? p.updatedAt ?? p.updated_at),

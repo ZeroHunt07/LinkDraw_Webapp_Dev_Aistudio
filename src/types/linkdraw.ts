@@ -74,6 +74,7 @@ export interface GraphEdge {
   type: EdgeRouting;
   lineStyle: LineStyle;
   weight: number;
+  curvature?: number | null;
   layer: CanvasLayerName;
   highlightColor?: string | null;
   createdAt?: number;

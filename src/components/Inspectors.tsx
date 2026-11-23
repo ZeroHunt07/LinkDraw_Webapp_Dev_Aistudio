@@ -654,7 +654,7 @@ export const EdgeInspectorModal: React.FC<EdgeInspectorProps> = ({
           </button>
         </div>
 
-        <div className="p-5 space-y-4 text-sm">
+        <div className="p-5 space-y-4 text-sm max-h-[75vh] overflow-y-auto">
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2">
               <label className="block text-xs font-medium text-slate-500 mb-1">Label</label>
@@ -705,6 +705,100 @@ export const EdgeInspectorModal: React.FC<EdgeInspectorProps> = ({
                 <option value="both">Both</option>
                 <option value="none">None</option>
               </select>
+            </div>
+          </div>
+
+          {/* Curvature Control */}
+          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                  Curvature (Bend)
+                </span>
+                <span className="ml-2 font-mono text-[11px] text-blue-600 dark:text-blue-400">
+                  {draft.type === 'elbow' || draft.type === 'orthogonal'
+                    ? draft.type
+                    : draft.curvature === undefined || draft.curvature === null
+                    ? 'Auto'
+                    : `${draft.curvature > 0 ? '+' : ''}${Math.round(draft.curvature)} px`}
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const current =
+                      draft.curvature !== undefined && draft.curvature !== null
+                        ? draft.curvature
+                        : 48;
+                    setDraft({
+                      ...draft,
+                      type: 'curved',
+                      curvature: current === 0 ? -48 : -current,
+                    });
+                  }}
+                  className="px-2 py-0.5 text-[11px] font-medium rounded border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800"
+                >
+                  Flip
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraft({ ...draft, type: 'curved', curvature: null })}
+                  className={`px-2 py-0.5 text-[11px] font-medium rounded border ${
+                    draft.curvature === undefined || draft.curvature === null
+                      ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
+                      : 'border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Auto
+                </button>
+              </div>
+            </div>
+
+            <input
+              type="range"
+              min={-240}
+              max={240}
+              step={4}
+              value={
+                draft.curvature !== undefined && draft.curvature !== null
+                  ? draft.curvature
+                  : draft.type === 'straight'
+                  ? 0
+                  : 48
+              }
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  type: 'curved',
+                  curvature: Number(e.target.value),
+                })
+              }
+              className="w-full accent-blue-600 cursor-pointer"
+            />
+
+            <div className="grid grid-cols-5 gap-1.5">
+              {[-120, -48, 0, 48, 120].map((val) => {
+                const isActive =
+                  draft.type === 'curved' &&
+                  draft.curvature !== undefined &&
+                  draft.curvature !== null &&
+                  Math.round(draft.curvature) === val;
+                return (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setDraft({ ...draft, type: 'curved', curvature: val })}
+                    className={`py-1 rounded-md text-[11px] font-mono border transition-colors ${
+                      isActive
+                        ? 'border-blue-500 bg-blue-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {val === 0 ? 'Flat' : val > 0 ? `+${val}` : val}
+                  </button>
+                );
+              })}
             </div>
           </div>
 

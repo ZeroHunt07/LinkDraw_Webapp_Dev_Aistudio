@@ -121,6 +121,10 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     type: (e.type as GraphEdge['type']) ?? 'curved',
     lineStyle: (e.lineStyle ?? e.line_style ?? 'solid') as GraphEdge['lineStyle'],
     weight: Number(e.weight ?? 1),
+    curvature:
+      e.curvature !== undefined && e.curvature !== null && Number.isFinite(Number(e.curvature))
+        ? Number(e.curvature)
+        : null,
     layer: (e.layer as GraphEdge['layer']) ?? 'Data',
     createdAt: toTimestampMs(e.createdAt ?? e.createdAtMs ?? e.created_at),
     updatedAt: toTimestampMs(e.updatedAt ?? e.updatedAtMs ?? e.updated_at),

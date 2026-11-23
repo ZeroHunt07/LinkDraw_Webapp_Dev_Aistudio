@@ -43,6 +43,7 @@ import type {
   WorkspaceBoard,
 } from '../types/linkdraw';
 import {
+  computeEdgeCurvatureFromPoint,
   computeEdgeGeometry,
   computeFittedTextLayout,
   computeMindmapVisibility,
@@ -145,12 +146,21 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     | { mode: 'pinch'; lastDist: number; lastCx: number; lastCy: number }
     | { mode: 'drag_nodes'; startWx: number; startWy: number; origins: Map<string, { x: number; y: number }>; moved: boolean }
     | { mode: 'drag_sticky'; id: string; startWx: number; startWy: number; origX: number; origY: number; moved: boolean }
+    | { mode: 'drag_edge_curve'; id: string; isSelfLoop: boolean; labelYOffset: number; moved: boolean }
     | { mode: 'marquee'; startWx: number; startWy: number; currWx: number; currWy: number }
     | { mode: 'draw_stroke'; stroke: FreehandStroke }
     | { mode: 'erase_stroke'; onlyHighlight: boolean; lastWx: number; lastWy: number; erasedAny: boolean }
   >({ mode: 'none' });
   const pointerWorldRef = useRef<{ x: number; y: number } | null>(null);
   const badgeHitsRef = useRef<BadgeHitTarget[]>([]);
+  const edgeCurveHandleRef = useRef<{
+    edgeId: string;
+    x: number;
+    y: number;
+    isSelfLoop: boolean;
+    labelYOffset: number;
+    curvature: number;
+  } | null>(null);
   const minimapDragRef = useRef(false);
   const minimapBoundsRef = useRef<{ minX: number; minY: number; scale: number; w: number; h: number } | null>(null);
   const flowPhaseRef = useRef(0);
@@ -162,6 +172,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (
       gestureRef.current.mode !== 'drag_nodes' &&
       gestureRef.current.mode !== 'drag_sticky' &&
+      gestureRef.current.mode !== 'drag_edge_curve' &&
       gestureRef.current.mode !== 'draw_stroke' &&
       gestureRef.current.mode !== 'erase_stroke'
     ) {
@@ -523,6 +534,25 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       }
     }
 
+    // Check Selected Edge Curvature Handle
+    const curveHandle = edgeCurveHandleRef.current;
+    if (
+      tool === 'select' &&
+      selectedEdgeId &&
+      curveHandle &&
+      curveHandle.edgeId === selectedEdgeId &&
+      Math.hypot(wx - curveHandle.x, wy - curveHandle.y) <= 14 / cameraRef.current.scale
+    ) {
+      gestureRef.current = {
+        mode: 'drag_edge_curve',
+        id: curveHandle.edgeId,
+        isSelfLoop: curveHandle.isSelfLoop,
+        labelYOffset: curveHandle.labelYOffset,
+        moved: false,
+      };
+      return;
+    }
+
     // Tool: Add Node
     if (tool === 'add_node') {
       const now = Date.now();
@@ -834,6 +864,33 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
+    if (gest.mode === 'drag_edge_curve') {
+      const g = liveGraphRef.current;
+      const edge = g.edges.find((item) => item.id === gest.id);
+      if (edge) {
+        const src = g.nodes.find((n) => n.id === edge.a);
+        const dst = g.nodes.find((n) => n.id === edge.b);
+        if (src && dst) {
+          const nextCurvature = computeEdgeCurvatureFromPoint(
+            src,
+            dst,
+            wx,
+            wy - gest.labelYOffset
+          );
+          gest.moved = true;
+          liveGraphRef.current = {
+            ...g,
+            edges: g.edges.map((item) =>
+              item.id === gest.id
+                ? { ...item, type: 'curved', curvature: nextCurvature }
+                : item
+            ),
+          };
+        }
+      }
+      return;
+    }
+
     if (gest.mode === 'marquee') {
       gest.currWx = wx;
       gest.currWy = wy;
@@ -892,6 +949,22 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           ...liveGraphRef.current,
           stickies: liveGraphRef.current.stickies.map((s) =>
             s.id === gest.id ? { ...s, updatedAt: now } : s
+          ),
+        };
+        liveGraphRef.current = committed;
+        onCommitGraph(committed, true);
+      }
+      return;
+    }
+
+    if (gest.mode === 'drag_edge_curve') {
+      gestureRef.current = { mode: 'none' };
+      if (gest.moved) {
+        const now = Date.now();
+        const committed: GraphDocument = {
+          ...liveGraphRef.current,
+          edges: liveGraphRef.current.edges.map((item) =>
+            item.id === gest.id ? { ...item, updatedAt: now } : item
           ),
         };
         liveGraphRef.current = committed;
@@ -1049,6 +1122,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               !hiddenNodes.has(e.b)
           );
           const parallelMap = computeParallelEdgeIndexMap(visibleEdges);
+          let nextCurveHandle: {
+            edgeId: string;
+            x: number;
+            y: number;
+            isSelfLoop: boolean;
+            labelYOffset: number;
+            curvature: number;
+          } | null = null;
 
           for (const edge of visibleEdges) {
             const geom = computeEdgeGeometry(edge, nodeMap, parallelMap.get(edge.id));
@@ -1133,7 +1214,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             }
 
             // Edge Label Pill (LOD: hide below 0.35x zoom)
-            if (cam.scale >= 0.35 && (edge.label || edge.weight !== 1)) {
+            const showsLabelPill = cam.scale >= 0.35 && Boolean(edge.label || edge.weight !== 1);
+            if (showsLabelPill) {
               const labelText = edge.label
                 ? edge.weight !== 1
                   ? `${edge.label} (${edge.weight})`
@@ -1154,8 +1236,70 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               ctx.textBaseline = 'middle';
               ctx.fillText(labelText, geom.labelPos.x, geom.labelPos.y + 0.5);
             }
+
+            // Selected Edge Curvature Drag Handle
+            if (
+              isSelected &&
+              geom.curveHandlePos &&
+              (edge.type === 'curved' || edge.type === 'straight' || geom.isSelfLoop)
+            ) {
+              const labelYOffset = showsLabelPill ? 18 : 0;
+              const hx = geom.curveHandlePos.x;
+              const hy = geom.curveHandlePos.y + labelYOffset;
+              const effCurv = Math.round(geom.effectiveCurvature ?? 0);
+              nextCurveHandle = {
+                edgeId: edge.id,
+                x: hx,
+                y: hy,
+                isSelfLoop: geom.isSelfLoop,
+                labelYOffset,
+                curvature: effCurv,
+              };
+
+              const isDraggingThisCurve =
+                gestureRef.current.mode === 'drag_edge_curve' &&
+                gestureRef.current.id === edge.id;
+
+              if (isDraggingThisCurve) {
+                ctx.beginPath();
+                ctx.moveTo(startPt.x, startPt.y);
+                ctx.lineTo(geom.curveHandlePos.x, geom.curveHandlePos.y);
+                ctx.lineTo(endPt.x, endPt.y);
+                ctx.strokeStyle = 'rgba(37, 99, 235, 0.35)';
+                ctx.lineWidth = 1.2 / cam.scale;
+                ctx.setLineDash([4 / cam.scale, 3 / cam.scale]);
+                ctx.stroke();
+                ctx.setLineDash([]);
+              }
+
+              const knobR = (isDraggingThisCurve ? 7.5 : 6) / cam.scale;
+              ctx.beginPath();
+              ctx.arc(hx, hy, knobR, 0, Math.PI * 2);
+              ctx.fillStyle = '#2563eb';
+              ctx.strokeStyle = '#ffffff';
+              ctx.lineWidth = 2 / cam.scale;
+              ctx.fill();
+              ctx.stroke();
+
+              if (isDraggingThisCurve) {
+                const badgeText = effCurv === 0 ? 'Flat (0 px)' : `Bend: ${effCurv > 0 ? '+' : ''}${effCurv} px`;
+                ctx.font = '600 11px "JetBrains Mono", monospace';
+                const bw = ctx.measureText(badgeText).width + 14;
+                const bh = 20;
+                const bx = hx - bw / 2;
+                const by = hy - knobR - bh - 6;
+                ctx.fillStyle = '#0f172a';
+                drawRoundedRect(ctx, bx, by, bw, bh, 6);
+                ctx.fill();
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(badgeText, hx, by + bh / 2);
+              }
+            }
             ctx.restore();
           }
+          edgeCurveHandleRef.current = nextCurveHandle;
 
           // Rubber-band line during Connect mode
           if (tool === 'connect' && connectSourceId && pointerWorldRef.current) {
