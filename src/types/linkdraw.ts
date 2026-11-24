@@ -13,7 +13,32 @@ export type NodeShape =
   | 'parallelogram'
   | 'table'
   | 'progress_bar'
-  | 'text';
+  | 'text'
+  | 'resistor'
+  | 'capacitor'
+  | 'inductor'
+  | 'battery'
+  | 'ground'
+  | 'diode'
+  | 'bulb'
+  | 'switch_sym'
+  | 'and_gate'
+  | 'or_gate'
+  | 'not_gate'
+  | 'transistor'
+  | 'spring'
+  | 'pulley'
+  | 'incline'
+  | 'lens'
+  | 'wave'
+  | 'axes_2d'
+  | 'vector_arrow'
+  | 'angle_arc'
+  | 'venn_2'
+  | 'bell_curve'
+  | 'cube_3d'
+  | 'cone_3d'
+  | 'matrix_box';
 
 export type IconPosition = 'inline' | 'top' | 'left';
 export type EdgeRouting = 'straight' | 'curved' | 'elbow' | 'orthogonal';
@@ -24,6 +49,7 @@ export type ThemeMode = 'light' | 'dark' | 'high_contrast';
 export type ToolMode =
   | 'select'
   | 'add_node'
+  | 'draw_shape'
   | 'connect'
   | 'sticky'
   | 'pen'
@@ -54,6 +80,9 @@ export interface GraphNode {
   text: string;
   shape: NodeShape;
   color: string;
+  filled?: boolean;
+  borderColor?: string;
+  borderWidth?: number;
   textColor?: string;
   fs?: number;
   icon?: string;
@@ -99,6 +128,7 @@ export interface StickyNote {
   h: number;
   text: string;
   color: string;
+  tags?: string[];
   layer: CanvasLayerName;
   createdAt?: number;
   updatedAt?: number;

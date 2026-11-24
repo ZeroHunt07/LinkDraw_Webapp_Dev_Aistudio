@@ -65,15 +65,17 @@ export function filterGraphByPage(doc: GraphDocument, targetPageId: string): Gra
     nodePageMap.set(n.id, pid);
     return pid === effectivePageId;
   });
+  const stickies = doc.stickies.filter((s) => {
+    const pid = resolveElementPageId(s.pageId, pages);
+    nodePageMap.set(s.id, pid);
+    return pid === effectivePageId;
+  });
   const edges = doc.edges.filter((e) => {
     const pid = e.pageId
       ? resolveElementPageId(e.pageId, pages)
-      : nodePageMap.get(e.a) ?? resolveElementPageId(undefined, pages);
+      : nodePageMap.get(e.a) ?? nodePageMap.get(e.b) ?? resolveElementPageId(undefined, pages);
     return pid === effectivePageId;
   });
-  const stickies = doc.stickies.filter(
-    (s) => resolveElementPageId(s.pageId, pages) === effectivePageId
-  );
   const strokes = doc.strokes.filter(
     (st) => resolveElementPageId(st.pageId, pages) === effectivePageId
   );

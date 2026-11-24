@@ -16,6 +16,36 @@ export interface EdgeGeometry {
   effectiveCurvature?: number;
 }
 
+export function stickyToProxyNode(s: StickyNote): GraphNode {
+  return {
+    id: s.id,
+    pageId: s.pageId,
+    x: s.x,
+    y: s.y,
+    w: s.w,
+    h: s.h,
+    text: s.text,
+    shape: 'rectangle',
+    color: s.color,
+    tags: s.tags ?? [],
+    metadata: {},
+    layer: s.layer,
+    createdAt: s.createdAt,
+    updatedAt: s.updatedAt,
+  };
+}
+
+export function buildEntityMap(nodes: GraphNode[], stickies: StickyNote[] = []): Map<string, GraphNode> {
+  const map = new Map<string, GraphNode>();
+  for (const n of nodes) map.set(n.id, n);
+  for (const s of stickies) {
+    if (!map.has(s.id)) {
+      map.set(s.id, stickyToProxyNode(s));
+    }
+  }
+  return map;
+}
+
 export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: number; offsetY: number } {
   const padW = Math.max(24, node.w - 22);
   const padH = Math.max(18, node.h - 16);
@@ -38,6 +68,29 @@ export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: numb
       return { maxW: Math.max(24, node.w * 0.68), maxH: padH, offsetY: 0 };
     case 'cloud':
       return { maxW: Math.max(24, node.w * 0.66), maxH: Math.max(18, node.h * 0.54), offsetY: 0 };
+    case 'incline':
+      return { maxW: Math.max(24, node.w * 0.52), maxH: Math.max(18, node.h * 0.42), offsetY: node.h * 0.18 };
+    case 'cone_3d':
+      return { maxW: Math.max(24, node.w * 0.55), maxH: Math.max(18, node.h * 0.44), offsetY: node.h * 0.14 };
+    case 'axes_2d':
+    case 'bell_curve':
+      return { maxW: padW, maxH: 24, offsetY: -node.h * 0.38 };
+    case 'resistor':
+    case 'capacitor':
+    case 'inductor':
+    case 'battery':
+    case 'ground':
+    case 'diode':
+    case 'bulb':
+    case 'switch_sym':
+    case 'transistor':
+    case 'spring':
+    case 'pulley':
+    case 'lens':
+    case 'wave':
+    case 'vector_arrow':
+    case 'angle_arc':
+      return { maxW: Math.max(40, node.w + 20), maxH: 24, offsetY: node.h * 0.44 };
     default:
       return { maxW: padW, maxH: padH, offsetY: 0 };
   }
@@ -576,4 +629,29 @@ export const ALL_NODE_SHAPES: { value: NodeShape; label: string }[] = [
   { value: 'table', label: 'Data Table' },
   { value: 'progress_bar', label: 'Progress Card' },
   { value: 'text', label: 'Plain Text' },
+  { value: 'resistor', label: 'Resistor (Schematic)' },
+  { value: 'capacitor', label: 'Capacitor (Schematic)' },
+  { value: 'inductor', label: 'Inductor / Coil' },
+  { value: 'battery', label: 'DC Source / Battery' },
+  { value: 'ground', label: 'Ground (GND)' },
+  { value: 'diode', label: 'Diode / LED' },
+  { value: 'bulb', label: 'Lamp / Load' },
+  { value: 'switch_sym', label: 'Switch' },
+  { value: 'and_gate', label: 'AND Gate' },
+  { value: 'or_gate', label: 'OR Gate' },
+  { value: 'not_gate', label: 'NOT Gate (Inverter)' },
+  { value: 'transistor', label: 'Transistor (BJT)' },
+  { value: 'spring', label: 'Helical Spring (Physics)' },
+  { value: 'pulley', label: 'Pulley (Physics)' },
+  { value: 'incline', label: 'Inclined Plane / Wedge' },
+  { value: 'lens', label: 'Convex Lens (Optics)' },
+  { value: 'wave', label: 'Sine Wave (Physics)' },
+  { value: 'axes_2d', label: '2D Coordinate Axes (Math)' },
+  { value: 'vector_arrow', label: 'Vector / Force Arrow' },
+  { value: 'angle_arc', label: 'Angle Arc (Geometry)' },
+  { value: 'venn_2', label: '2-Set Venn Diagram' },
+  { value: 'bell_curve', label: 'Normal Bell Curve' },
+  { value: 'cube_3d', label: '3D Prism / Cube' },
+  { value: 'cone_3d', label: '3D Cone' },
+  { value: 'matrix_box', label: 'Bracketed Matrix' },
 ];

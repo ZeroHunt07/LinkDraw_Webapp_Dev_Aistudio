@@ -45,7 +45,7 @@ import {
   scanGraphForEntities,
   type OsintEntity,
 } from '../lib/osint';
-import { DEFAULT_SHEET_CELLS, evaluateSheetCell, type SheetGrid } from '../lib/formulaEngine';
+import { evaluateSheetCell, type SheetGrid } from '../lib/formulaEngine';
 import {
   exportCSVBundle,
   exportGraphML,
@@ -62,6 +62,7 @@ interface UtilitiesSuiteProps {
   activeSubTab: UtilitySubTab;
   onSubTabChange: (tab: UtilitySubTab) => void;
   boardTitle: string;
+  worksheetKey?: string;
   graph: GraphDocument;
   fullGraph?: GraphDocument;
   theme: ThemeMode;
@@ -80,6 +81,7 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
   activeSubTab,
   onSubTabChange,
   boardTitle,
+  worksheetKey,
   graph,
   fullGraph,
   theme,
@@ -105,9 +107,14 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
   const [osintEntities, setOsintEntities] = useState<OsintEntity[]>([]);
   const [enriching, setEnriching] = useState(false);
 
-  // Formula Sheet state
-  const [sheetGrid, setSheetGrid] = useState<SheetGrid>(() => ({ ...DEFAULT_SHEET_CELLS }));
-  const [selectedCell, setSelectedCell] = useState<string>('B2');
+  // Formula Data Sheet state (always starts empty and clears on each worksheet switch)
+  const [sheetGrid, setSheetGrid] = useState<SheetGrid>({});
+  const [selectedCell, setSelectedCell] = useState<string>('A1');
+
+  useEffect(() => {
+    setSheetGrid({});
+    setSelectedCell('A1');
+  }, [worksheetKey]);
 
   useEffect(() => {
     if (graph.nodes.length > 0) {
@@ -772,12 +779,12 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold">Live Graph Formula Sheet</h2>
+                <h2 className="text-sm font-semibold">Data Sheet &amp; Formula Engine</h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Supports =SUM(B2:B3), =AVERAGE(...), =IF(...), =NODE("Name","progress"), =GRAPH("nodes")
+                  Fresh empty sheet per worksheet. Supports =SUM(A1:B4), =AVERAGE(...), =IF(...), =NODE("Name","progress"), =GRAPH("nodes")
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-mono font-semibold px-2 py-1 rounded bg-slate-100 dark:bg-slate-800">
                   {selectedCell}
                 </span>
@@ -788,8 +795,20 @@ export const UtilitiesSuite: React.FC<UtilitiesSuiteProps> = ({
                     setSheetGrid({ ...sheetGrid, [selectedCell]: e.target.value })
                   }
                   placeholder="Enter value or =FORMULA..."
-                  className="w-64 sm:w-80 px-3 py-1.5 font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950"
+                  className="w-56 sm:w-72 px-3 py-1.5 font-mono rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950"
                 />
+                <button
+                  type="button"
+                  disabled={Object.values(sheetGrid).every((v) => !v)}
+                  onClick={() => {
+                    setSheetGrid({});
+                    setSelectedCell('A1');
+                    onNotify('Data sheet cleared.');
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-40"
+                >
+                  Clear Sheet
+                </button>
               </div>
             </div>
 

@@ -122,6 +122,15 @@ export function encodeNodePayload(node: GraphNode): Record<string, unknown> {
   if (node.pageId && node.pageId !== DEFAULT_PAGE_ID) {
     payload.pageId = sanitizeElementId(node.pageId, 'pg');
   }
+  if (node.filled === false) payload.filled = false;
+  if (node.borderColor) payload.borderColor = String(node.borderColor);
+  if (
+    node.borderWidth !== undefined &&
+    node.borderWidth !== null &&
+    Number.isFinite(Number(node.borderWidth))
+  ) {
+    payload.borderWidth = Math.max(0.5, Math.min(20, Math.round(Number(node.borderWidth) * 10) / 10));
+  }
   if (node.textColor) payload.textColor = String(node.textColor);
   if (node.tableData) {
     payload.tableHeaders = (node.tableData.headers ?? []).slice(0, 15).map(String);
@@ -162,6 +171,8 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
 
   const rawTextColor = p.textColor ?? p.text_color;
   const rawIconPosition = p.iconPosition ?? p.icon_position ?? 'inline';
+  const rawBorderColor = p.borderColor ?? p.border_color;
+  const rawBorderWidth = p.borderWidth ?? p.border_width;
 
   const rawPageId = p.pageId ?? p.page_id;
 
@@ -172,9 +183,14 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
     y: Number(p.y ?? 0),
     w: Number(p.w ?? 140),
     h: Number(p.h ?? 58),
-    text: String(p.text ?? 'Node'),
+    text: p.text !== undefined && p.text !== null ? String(p.text) : 'Node',
     shape: (p.shape as GraphNode['shape']) ?? 'rounded',
     color: String(p.color ?? '#dbeafe'),
+    ...(p.filled === false ? { filled: false } : {}),
+    ...(rawBorderColor ? { borderColor: String(rawBorderColor) } : {}),
+    ...(rawBorderWidth !== undefined && rawBorderWidth !== null && Number.isFinite(Number(rawBorderWidth))
+      ? { borderWidth: Number(rawBorderWidth) }
+      : {}),
     textColor: rawTextColor ? String(rawTextColor) : undefined,
     fs: Number(p.fs ?? 13),
     icon: p.icon ? String(p.icon) : '',
@@ -272,11 +288,15 @@ export function encodeStickyPayload(sticky: StickyNote): Record<string, unknown>
   if (sticky.pageId && sticky.pageId !== DEFAULT_PAGE_ID) {
     payload.pageId = sanitizeElementId(sticky.pageId, 'pg');
   }
+  if (Array.isArray(sticky.tags) && sticky.tags.length > 0) {
+    payload.tags = sticky.tags.slice(0, 20).map(String);
+  }
   return payload;
 }
 
 export function decodeStickyPayload(id: string, p: Record<string, unknown>): StickyNote {
   const rawPageId = p.pageId ?? p.page_id;
+  const rawTags = Array.isArray(p.tags) ? p.tags.map(String).filter(Boolean) : [];
   return {
     id: String(p.id ?? id),
     ...(rawPageId ? { pageId: String(rawPageId) } : {}),
@@ -286,6 +306,7 @@ export function decodeStickyPayload(id: string, p: Record<string, unknown>): Sti
     h: Number(p.h ?? 110),
     text: String(p.text ?? ''),
     color: String(p.color ?? '#fef08a'),
+    ...(rawTags.length > 0 ? { tags: rawTags } : {}),
     layer: (p.layer as StickyNote['layer']) ?? 'Annotations',
     createdAt: toMillis(p.createdAtMs ?? p.createdAt ?? p.created_at),
     updatedAt: toMillis(p.updatedAtMs ?? p.updatedAt ?? p.updated_at),

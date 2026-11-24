@@ -3,32 +3,7 @@ import { computeGraphTelemetry } from './algorithms';
 
 export type SheetGrid = Record<string, string>;
 
-export const DEFAULT_SHEET_CELLS: SheetGrid = {
-  A1: 'Metric / Node',
-  B1: 'Value',
-  C1: 'Notes',
-  A2: 'Total Nodes',
-  B2: '=GRAPH("nodes")',
-  C2: 'Live count',
-  A3: 'Total Edges',
-  B3: '=GRAPH("edges")',
-  C3: 'Live count',
-  A4: 'Density',
-  B4: '=GRAPH("density")',
-  C4: '0..1 ratio',
-  A5: 'Clusters',
-  B5: '=GRAPH("clusters")',
-  C5: 'Connected',
-  A6: 'Sum B2:B3',
-  B6: '=SUM(B2:B3)',
-  C6: 'Combined elements',
-  A7: 'Avg B2:B3',
-  B7: '=AVERAGE(B2:B3)',
-  C7: 'Mean elements',
-  A8: 'Health Check',
-  B8: '=IF(B2>0,"Active","Empty")',
-  C8: 'Conditional formula',
-};
+export const DEFAULT_SHEET_CELLS: SheetGrid = {};
 
 function colToIndex(col: string): number {
   let res = 0;

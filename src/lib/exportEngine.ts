@@ -1,5 +1,5 @@
 import type { GraphDocument, GraphEdge, GraphNode } from '../types/linkdraw';
-import { computeEdgeGeometry, computeParallelEdgeIndexMap } from './geometry';
+import { buildEntityMap, computeEdgeGeometry, computeParallelEdgeIndexMap } from './geometry';
 
 export function exportLinkDrawJSON(doc: GraphDocument, title: string): string {
   return JSON.stringify(
@@ -100,9 +100,14 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     y: Number(n.y ?? 0),
     w: Number(n.w ?? 140),
     h: Number(n.h ?? 58),
-    text: String(n.text ?? 'Node'),
+    text: n.text !== undefined && n.text !== null ? String(n.text) : 'Node',
     shape: (n.shape as GraphNode['shape']) ?? 'rounded',
     color: String(n.color ?? '#dbeafe'),
+    ...(n.filled === false ? { filled: false } : {}),
+    ...(n.borderColor || n.border_color ? { borderColor: String(n.borderColor ?? n.border_color) } : {}),
+    ...(n.borderWidth !== undefined || n.border_width !== undefined
+      ? { borderWidth: Number(n.borderWidth ?? n.border_width) }
+      : {}),
     textColor: n.textColor ? String(n.textColor) : n.text_color ? String(n.text_color) : undefined,
     fs: n.fs ? Number(n.fs) : 13,
     icon: n.icon ? String(n.icon) : '',
@@ -143,19 +148,23 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
     updatedAt: toTimestampMs(e.updatedAt ?? e.updatedAtMs ?? e.updated_at),
   }));
 
-  const stickies = rawStickies.map((s: Record<string, unknown>, idx) => ({
-    id: sanitizeId(s.id, `s_${idx}`),
-    pageId: s.pageId || s.page_id ? sanitizeId(s.pageId ?? s.page_id, 'page_1') : undefined,
-    x: Number(s.x ?? 0),
-    y: Number(s.y ?? 0),
-    w: Number(s.w ?? 170),
-    h: Number(s.h ?? 110),
-    text: String(s.text ?? ''),
-    color: String(s.color ?? '#fef08a'),
-    layer: (s.layer as GraphNode['layer']) ?? 'Annotations',
-    createdAt: toTimestampMs(s.createdAt ?? s.createdAtMs ?? s.created_at),
-    updatedAt: toTimestampMs(s.updatedAt ?? s.updatedAtMs ?? s.updated_at),
-  }));
+  const stickies = rawStickies.map((s: Record<string, unknown>, idx) => {
+    const rawTags = Array.isArray(s.tags) ? s.tags.map(String).filter(Boolean) : [];
+    return {
+      id: sanitizeId(s.id, `s_${idx}`),
+      pageId: s.pageId || s.page_id ? sanitizeId(s.pageId ?? s.page_id, 'page_1') : undefined,
+      x: Number(s.x ?? 0),
+      y: Number(s.y ?? 0),
+      w: Number(s.w ?? 170),
+      h: Number(s.h ?? 110),
+      text: String(s.text ?? ''),
+      color: String(s.color ?? '#fef08a'),
+      ...(rawTags.length > 0 ? { tags: rawTags } : {}),
+      layer: (s.layer as GraphNode['layer']) ?? 'Annotations',
+      createdAt: toTimestampMs(s.createdAt ?? s.createdAtMs ?? s.created_at),
+      updatedAt: toTimestampMs(s.updatedAt ?? s.updatedAtMs ?? s.updated_at),
+    };
+  });
 
   const strokes = rawStrokes.map((st: Record<string, unknown>, idx) => ({
     id: sanitizeId(st.id, `st_${idx}`),
@@ -212,7 +221,7 @@ function escapeXml(str: string): string {
 }
 
 export function exportSVG(doc: GraphDocument): string {
-  if (doc.nodes.length === 0 && doc.stickies.length === 0) {
+  if (doc.nodes.length === 0 && doc.stickies.length === 0 && doc.strokes.length === 0) {
     return '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="240"></svg>';
   }
   let minX = Infinity;
@@ -231,10 +240,24 @@ export function exportSVG(doc: GraphDocument): string {
     maxX = Math.max(maxX, s.x + s.w / 2 + 20);
     maxY = Math.max(maxY, s.y + s.h / 2 + 20);
   }
+  for (const st of doc.strokes) {
+    for (const pt of st.points) {
+      minX = Math.min(minX, pt.x - 20);
+      minY = Math.min(minY, pt.y - 20);
+      maxX = Math.max(maxX, pt.x + 20);
+      maxY = Math.max(maxY, pt.y + 20);
+    }
+  }
+  if (!Number.isFinite(minX)) {
+    minX = 0;
+    minY = 0;
+    maxX = 400;
+    maxY = 240;
+  }
   const width = Math.max(300, Math.ceil(maxX - minX));
   const height = Math.max(200, Math.ceil(maxY - minY));
 
-  const nodeMap = new Map(doc.nodes.map((n) => [n.id, n]));
+  const nodeMap = buildEntityMap(doc.nodes, doc.stickies);
   const parallelMap = computeParallelEdgeIndexMap(doc.edges);
 
   const edgeSvgs = doc.edges
@@ -263,18 +286,51 @@ export function exportSVG(doc: GraphDocument): string {
     .map((n) => {
       const x = n.x - n.w / 2;
       const y = n.y - n.h / 2;
+      const isFilled = n.filled !== false;
+      const fillAttr = isFilled ? escapeXml(n.color) : 'none';
+      const strokeAttr = escapeXml(n.borderColor || (isFilled ? '#334155' : n.color || '#334155'));
+      const strokeW = n.borderWidth ?? 1.6;
       const shapeSvg =
-        n.shape === 'circle'
-          ? `<ellipse cx="${n.x}" cy="${n.y}" rx="${n.w / 2}" ry="${n.h / 2}" fill="${escapeXml(
-              n.color
-            )}" stroke="#334155" stroke-width="1.5" />`
+        n.shape === 'text'
+          ? ''
+          : n.shape === 'circle'
+          ? `<ellipse cx="${n.x}" cy="${n.y}" rx="${n.w / 2}" ry="${n.h / 2}" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeW}" />`
           : `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="${
               n.shape === 'rectangle' || n.shape === 'table' ? 4 : 12
-            }" fill="${escapeXml(n.color)}" stroke="#334155" stroke-width="1.5" />`;
-      const label = n.icon ? `${n.icon} ${n.text}` : n.text;
-      return `${shapeSvg}<text x="${n.x}" y="${n.y + 4}" font-family="sans-serif" font-size="12" font-weight="600" fill="#0f172a" text-anchor="middle">${escapeXml(
-        label
-      )}</text>`;
+            }" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeW}" />`;
+      const label = (n.icon ? `${n.icon} ${n.text}` : n.text).trim();
+      const textSvg = label
+        ? `<text x="${n.x}" y="${n.y + 4}" font-family="sans-serif" font-size="12" font-weight="600" fill="#0f172a" text-anchor="middle">${escapeXml(
+            label
+          )}</text>`
+        : '';
+      return `${shapeSvg}${textSvg}`;
+    })
+    .join('\n  ');
+
+  const stickySvgs = doc.stickies
+    .map((s) => {
+      const x = s.x - s.w / 2;
+      const y = s.y - s.h / 2;
+      return `<rect x="${x}" y="${y}" width="${s.w}" height="${s.h}" rx="8" fill="${escapeXml(
+        s.color || '#fef08a'
+      )}" stroke="#cbd5e1" stroke-width="1" /><text x="${x + 10}" y="${
+        y + 20
+      }" font-family="sans-serif" font-size="11" fill="#1e293b">${escapeXml(s.text.slice(0, 80))}</text>`;
+    })
+    .join('\n  ');
+
+  const strokeSvgs = [...doc.strokes]
+    .sort((a, b) => (a.tool === b.tool ? 0 : a.tool === 'highlight' ? -1 : 1))
+    .map((st) => {
+      if (st.points.length < 2) return '';
+      const d = st.points
+        .map((pt, idx) => `${idx === 0 ? 'M' : 'L'} ${pt.x.toFixed(1)} ${pt.y.toFixed(1)}`)
+        .join(' ');
+      const opacity = st.tool === 'highlight' ? '0.35' : '0.94';
+      return `<path d="${d}" fill="none" stroke="${escapeXml(st.color)}" stroke-width="${
+        st.width
+      }" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="${opacity}" />`;
     })
     .join('\n  ');
 
@@ -282,15 +338,20 @@ export function exportSVG(doc: GraphDocument): string {
   <rect x="${minX}" y="${minY}" width="${width}" height="${height}" fill="#ffffff" />
   ${edgeSvgs}
   ${nodeSvgs}
+  ${stickySvgs}
+  ${strokeSvgs}
 </svg>`;
 }
 
 export function exportGraphvizDOT(doc: GraphDocument, title: string): string {
   const safeName = title.replace(/[^a-zA-Z0-9_]/g, '_') || 'LinkDrawGraph';
-  const nodeMap = new Map(doc.nodes.map((n) => [n.id, n]));
+  const nodeMap = buildEntityMap(doc.nodes, doc.stickies);
   const lines = [`digraph ${safeName} {`, '  rankdir=TB;', '  node [shape=box, style=rounded];'];
   for (const n of doc.nodes) {
     lines.push(`  "${n.id}" [label="${n.text.replace(/"/g, '\\"')}"];`);
+  }
+  for (const s of doc.stickies) {
+    lines.push(`  "${s.id}" [shape=note, label="${s.text.replace(/"/g, '\\"')}"];`);
   }
   for (const e of doc.edges) {
     if (!nodeMap.has(e.a) || !nodeMap.has(e.b)) continue;

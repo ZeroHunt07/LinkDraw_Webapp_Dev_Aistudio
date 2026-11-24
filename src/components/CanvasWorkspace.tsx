@@ -3,13 +3,17 @@ import {
   AlignCenterHorizontal,
   AlignLeft,
   AlignStartVertical,
+  Atom,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Columns3,
   Copy,
   Eraser,
   Eye,
   EyeOff,
+  FileDown,
   FolderInput,
   Highlighter,
   Layers,
@@ -26,6 +30,7 @@ import {
   Redo2,
   Rows3,
   Search,
+  Shapes,
   SlidersHorizontal,
   Spline,
   StickyNote as StickyIcon,
@@ -45,31 +50,42 @@ import type {
   GraphEdge,
   GraphNode,
   GraphPage,
+  NodeShape,
   StickyNote,
   ThemeMode,
   ToolMode,
   WorkspaceBoard,
 } from '../types/linkdraw';
 import {
+  ALL_NODE_SHAPES,
+  buildEntityMap,
   computeEdgeCurvatureFromPoint,
   computeEdgeGeometry,
-  computeFittedTextLayout,
   computeMindmapVisibility,
   computeParallelEdgeIndexMap,
-  getContrastTextColor,
-  getShapeSafeTextBox,
-  getStarPolygon,
   hitTestEdge,
   hitTestNode,
   hitTestSticky,
   wrapTextLines,
 } from '../lib/geometry';
+import {
+  drawArrowhead,
+  drawNodeLabelAndIcon,
+  drawNodeShape,
+  drawRoundedRect,
+  drawTableContent,
+  samplePointAlongPolyline,
+} from '../lib/canvasRenderer';
+import { filterGraphByPage, normalizePages } from '../lib/templates';
+import { exportBoardToPDF } from '../lib/pdfExport';
+import { DiagramStudioModal, type DiagramImportPayload } from './DiagramStudioModal';
 import { makeSafeId } from '../lib/firestoreSync';
 
 interface CanvasWorkspaceProps {
   board: WorkspaceBoard;
   uid: string;
   graph: GraphDocument;
+  fullGraph?: GraphDocument;
   pages: GraphPage[];
   activePageId: string;
   pageNodeCounts: Record<string, number>;
@@ -100,6 +116,7 @@ interface CanvasWorkspaceProps {
   onInspectSticky: (sticky: StickyNote) => void;
   onOpenComments: () => void;
   onOpenCollaborators: () => void;
+  onNotify?: (msg: string) => void;
 }
 
 interface Camera {
@@ -115,10 +132,65 @@ interface BadgeHitTarget {
   r: number;
 }
 
+type ResizeHandleDir = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+interface ResizeHitTarget {
+  entityKind: 'node' | 'sticky';
+  id: string;
+  handle: ResizeHandleDir;
+  x: number;
+  y: number;
+}
+
+const DRAWABLE_SHAPES: { value: NodeShape; label: string }[] = [
+  { value: 'rectangle', label: 'Rect' },
+  { value: 'rounded', label: 'Round' },
+  { value: 'circle', label: 'Circle' },
+  { value: 'square', label: 'Square' },
+  { value: 'diamond', label: 'Diamond' },
+  { value: 'triangle', label: 'Triangle' },
+  { value: 'hexagon', label: 'Hexagon' },
+  { value: 'star', label: 'Star' },
+  { value: 'parallelogram', label: 'Para' },
+  { value: 'callout', label: 'Callout' },
+  { value: 'cylinder', label: 'Cylinder' },
+  { value: 'cloud', label: 'Cloud' },
+  { value: 'resistor', label: 'Resistor' },
+  { value: 'capacitor', label: 'Capacitor' },
+  { value: 'inductor', label: 'Inductor' },
+  { value: 'battery', label: 'DC Source' },
+  { value: 'ground', label: 'Ground' },
+  { value: 'diode', label: 'Diode' },
+  { value: 'bulb', label: 'Lamp' },
+  { value: 'switch_sym', label: 'Switch' },
+  { value: 'and_gate', label: 'AND Gate' },
+  { value: 'or_gate', label: 'OR Gate' },
+  { value: 'not_gate', label: 'NOT Gate' },
+  { value: 'transistor', label: 'Transistor' },
+  { value: 'spring', label: 'Spring' },
+  { value: 'pulley', label: 'Pulley' },
+  { value: 'incline', label: 'Incline' },
+  { value: 'lens', label: 'Convex Lens' },
+  { value: 'wave', label: 'Sine Wave' },
+  { value: 'axes_2d', label: '2D Axes' },
+  { value: 'vector_arrow', label: 'Vector' },
+  { value: 'angle_arc', label: 'Angle Arc' },
+  { value: 'venn_2', label: 'Venn 2-Set' },
+  { value: 'bell_curve', label: 'Bell Curve' },
+  { value: 'cube_3d', label: '3D Cube' },
+  { value: 'cone_3d', label: '3D Cone' },
+  { value: 'matrix_box', label: 'Matrix' },
+];
+
+const SHAPE_SWATCHES = ['#dbeafe', '#dcfce7', '#fef3c7', '#fee2e2', '#e0e7ff', '#fce7f3', '#ffffff', '#1e293b'];
+const BORDER_SWATCHES = ['#2563eb', '#0f172a', '#dc2626', '#059669', '#d97706', '#7c3aed', '#f8fafc'];
+const PEN_SWATCHES = ['#1e293b', '#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed', '#f8fafc'];
+
 export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   board,
   uid,
   graph,
+  fullGraph,
   pages,
   activePageId,
   pageNodeCounts,
@@ -149,6 +221,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onInspectSticky,
   onOpenComments,
   onOpenCollaborators,
+  onNotify,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -159,8 +232,36 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const [showLegend, setShowLegend] = useState(false);
   const [showMinimap, setShowMinimap] = useState(true);
   const [showLayersPanel, setShowLayersPanel] = useState(false);
+  const [showPdfMenu, setShowPdfMenu] = useState(false);
+  const [pdfScope, setPdfScope] = useState<'current' | 'all'>('current');
+  const [pdfOrientation, setPdfOrientation] = useState<'auto' | 'landscape' | 'portrait'>('auto');
+  const [pdfWhiteBg, setPdfWhiteBg] = useState(true);
+  const [pdfIncludeSummary, setPdfIncludeSummary] = useState(true);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [showDiagramStudio, setShowDiagramStudio] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [searchTypeFilter, setSearchTypeFilter] = useState<'all' | 'nodes' | 'stickies'>('all');
+  const [searchStyleFilter, setSearchStyleFilter] = useState<
+    'any' | 'filled' | 'unfilled' | 'connected' | 'isolated'
+  >('any');
+  const [searchShapeFilter, setSearchShapeFilter] = useState<string>('all');
+  const [searchColorFilter, setSearchColorFilter] = useState<string>('all');
+  const [searchTagFilter, setSearchTagFilter] = useState<string>('all');
+  const [searchMatchIdx, setSearchMatchIdx] = useState(0);
+
+  // Draw Shape tool config
+  const [drawShapeType, setDrawShapeType] = useState<NodeShape>('rectangle');
+  const [drawShapeFilled, setDrawShapeFilled] = useState(true);
+  const [drawShapeFillColor, setDrawShapeFillColor] = useState('#dbeafe');
+  const [drawShapeBorderColor, setDrawShapeBorderColor] = useState('#2563eb');
+  const [drawShapeBorderWidth, setDrawShapeBorderWidth] = useState(2);
+
+  // Pen / Highlight tool config
+  const [penColor, setPenColor] = useState<string>('');
+  const [penWidth, setPenWidth] = useState<number>(3);
+  const [highlightColor, setHighlightColor] = useState<string>('#facc15');
+
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
   const [editingPageId, setEditingPageId] = useState<string | null>(null);
@@ -171,6 +272,20 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const cameraRef = useRef<Camera>({ ox: 420, oy: 280, scale: 1 });
   const pageCamerasRef = useRef<Map<string, Camera>>(new Map());
   const liveGraphRef = useRef<GraphDocument>(graph);
+  const drawShapeConfigRef = useRef({
+    shape: drawShapeType,
+    filled: drawShapeFilled,
+    fillColor: drawShapeFillColor,
+    borderColor: drawShapeBorderColor,
+    borderWidth: drawShapeBorderWidth,
+  });
+  drawShapeConfigRef.current = {
+    shape: drawShapeType,
+    filled: drawShapeFilled,
+    fillColor: drawShapeFillColor,
+    borderColor: drawShapeBorderColor,
+    borderWidth: drawShapeBorderWidth,
+  };
   const activePointersRef = useRef<Map<number, { x: number; y: number }>>(new Map());
   const gestureRef = useRef<
     | { mode: 'none' }
@@ -178,6 +293,20 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     | { mode: 'pinch'; lastDist: number; lastCx: number; lastCy: number }
     | { mode: 'drag_nodes'; startWx: number; startWy: number; origins: Map<string, { x: number; y: number }>; moved: boolean }
     | { mode: 'drag_sticky'; id: string; startWx: number; startWy: number; origX: number; origY: number; moved: boolean }
+    | {
+        mode: 'resize_entity';
+        entityKind: 'node' | 'sticky';
+        id: string;
+        handle: ResizeHandleDir;
+        startWx: number;
+        startWy: number;
+        origX: number;
+        origY: number;
+        origW: number;
+        origH: number;
+        moved: boolean;
+      }
+    | { mode: 'draw_shape'; startWx: number; startWy: number; currWx: number; currWy: number }
     | { mode: 'drag_edge_curve'; id: string; isSelfLoop: boolean; labelYOffset: number; moved: boolean }
     | { mode: 'marquee'; startWx: number; startWy: number; currWx: number; currWy: number }
     | { mode: 'draw_stroke'; stroke: FreehandStroke }
@@ -185,6 +314,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   >({ mode: 'none' });
   const pointerWorldRef = useRef<{ x: number; y: number } | null>(null);
   const badgeHitsRef = useRef<BadgeHitTarget[]>([]);
+  const resizeHandlesRef = useRef<ResizeHitTarget[]>([]);
   const edgeCurveHandleRef = useRef<{
     edgeId: string;
     x: number;
@@ -204,6 +334,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (
       gestureRef.current.mode !== 'drag_nodes' &&
       gestureRef.current.mode !== 'drag_sticky' &&
+      gestureRef.current.mode !== 'resize_entity' &&
+      gestureRef.current.mode !== 'draw_shape' &&
       gestureRef.current.mode !== 'drag_edge_curve' &&
       gestureRef.current.mode !== 'draw_stroke' &&
       gestureRef.current.mode !== 'erase_stroke'
@@ -288,6 +420,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         const k = e.key.toLowerCase();
         if (k === 'v') setTool('select');
         else if (k === 'n') setTool('add_node');
+        else if (k === 'd') setTool('draw_shape');
         else if (k === 'c' || k === 'e') setTool('connect');
         else if (k === 's') setTool('sticky');
         else if (k === 'p') setTool('pen');
@@ -334,7 +467,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const nodes = liveGraphRef.current.nodes;
-    if (nodes.length === 0) {
+    const stickies = liveGraphRef.current.stickies;
+    if (nodes.length === 0 && stickies.length === 0) {
       cameraRef.current = { ox: rect.width / 2, oy: rect.height / 2, scale: 1 };
     } else {
       let minX = Infinity;
@@ -346,6 +480,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         minY = Math.min(minY, n.y - n.h / 2);
         maxX = Math.max(maxX, n.x + n.w / 2);
         maxY = Math.max(maxY, n.y + n.h / 2);
+      }
+      for (const s of stickies) {
+        minX = Math.min(minX, s.x - s.w / 2);
+        minY = Math.min(minY, s.y - s.h / 2);
+        maxX = Math.max(maxX, s.x + s.w / 2);
+        maxY = Math.max(maxY, s.y + s.h / 2);
       }
       const gw = Math.max(200, maxX - minX + 120);
       const gh = Math.max(200, maxY - minY + 120);
@@ -364,14 +504,18 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const handleDeleteSelected = useCallback(() => {
     const g = liveGraphRef.current;
     if (selectedNodeIds.length === 0 && !selectedEdgeId && !selectedStickyId) return;
-    const selSet = new Set(selectedNodeIds);
+    const deletedEntityIds = new Set(selectedNodeIds);
+    if (selectedStickyId) deletedEntityIds.add(selectedStickyId);
     const next: GraphDocument = {
       ...g,
-      nodes: g.nodes.filter((n) => !selSet.has(n.id)),
+      nodes: g.nodes.filter((n) => !deletedEntityIds.has(n.id)),
       edges: g.edges.filter(
-        (e) => e.id !== selectedEdgeId && !selSet.has(e.a) && !selSet.has(e.b)
+        (e) =>
+          e.id !== selectedEdgeId &&
+          !deletedEntityIds.has(e.a) &&
+          !deletedEntityIds.has(e.b)
       ),
-      stickies: g.stickies.filter((s) => s.id !== selectedStickyId),
+      stickies: g.stickies.filter((s) => !deletedEntityIds.has(s.id)),
     };
     liveGraphRef.current = next;
     onSelectionChange([], null, null);
@@ -444,6 +588,134 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     onCommitGraph({ ...graph, strokes: remaining }, true);
   };
 
+  const getViewportWorldCenter = () => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return toWorld(rect.width / 2, rect.height / 2);
+  };
+
+  const handleImportDiagram = (payload: DiagramImportPayload) => {
+    if (payload.nodes.length === 0 && payload.stickies.length === 0) return;
+
+    const center = getViewportWorldCenter();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+
+    payload.nodes.forEach((n) => {
+      minX = Math.min(minX, n.x - n.w / 2);
+      minY = Math.min(minY, n.y - n.h / 2);
+      maxX = Math.max(maxX, n.x + n.w / 2);
+      maxY = Math.max(maxY, n.y + n.h / 2);
+    });
+    payload.stickies.forEach((s) => {
+      minX = Math.min(minX, s.x - s.w / 2);
+      minY = Math.min(minY, s.y - s.h / 2);
+      maxX = Math.max(maxX, s.x + s.w / 2);
+      maxY = Math.max(maxY, s.y + s.h / 2);
+    });
+
+    const srcCx = Number.isFinite(minX) ? (minX + maxX) / 2 : 0;
+    const srcCy = Number.isFinite(minY) ? (minY + maxY) / 2 : 0;
+    const dx = snapCoord(Math.round(center.x - srcCx));
+    const dy = snapCoord(Math.round(center.y - srcCy));
+
+    const now = Date.now();
+    const idMap = new Map<string, string>();
+    payload.nodes.forEach((n) => idMap.set(n.id, makeSafeId('n')));
+    payload.stickies.forEach((s) => idMap.set(s.id, makeSafeId('s')));
+
+    const importedNodes: GraphNode[] = payload.nodes.map((n) => ({
+      ...n,
+      id: idMap.get(n.id) ?? makeSafeId('n'),
+      x: Math.round(n.x + dx),
+      y: Math.round(n.y + dy),
+      tags: [...(n.tags ?? [])],
+      metadata: { ...(n.metadata ?? {}) },
+      tableData: n.tableData
+        ? {
+            headers: [...n.tableData.headers],
+            rows: n.tableData.rows.map((r) => [...r]),
+          }
+        : n.tableData,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    const importedStickies: StickyNote[] = payload.stickies.map((s) => ({
+      ...s,
+      id: idMap.get(s.id) ?? makeSafeId('s'),
+      x: Math.round(s.x + dx),
+      y: Math.round(s.y + dy),
+      tags: s.tags ? [...s.tags] : undefined,
+      createdAt: now,
+      updatedAt: now,
+    }));
+
+    const importedEdges: GraphEdge[] = payload.edges
+      .filter((e) => idMap.has(e.a) && idMap.has(e.b))
+      .map((e) => ({
+        ...e,
+        id: makeSafeId('e'),
+        a: idMap.get(e.a)!,
+        b: idMap.get(e.b)!,
+        createdAt: now,
+        updatedAt: now,
+      }));
+
+    const next: GraphDocument = {
+      ...graph,
+      nodes: [...graph.nodes, ...importedNodes],
+      edges: [...graph.edges, ...importedEdges],
+      stickies: [...graph.stickies, ...importedStickies],
+    };
+
+    liveGraphRef.current = next;
+    onCommitGraph(next, true);
+    onSelectionChange(
+      importedNodes.map((n) => n.id),
+      null,
+      importedNodes.length === 0 ? (importedStickies[0]?.id ?? null) : null
+    );
+    setShowDiagramStudio(false);
+    setTool('select');
+    onNotify?.(`Imported "${payload.title}" to canvas.`);
+  };
+
+  const handleExportPdfReport = () => {
+    setExportingPdf(true);
+    try {
+      const currentPage = pages.find((p) => p.id === activePageId) ?? pages[0];
+      let pagesToExport: { page: GraphPage; graph: GraphDocument }[] = [];
+      if (pdfScope === 'all' && pages.length > 1 && fullGraph) {
+        const normPages = normalizePages(fullGraph.pages ?? pages);
+        pagesToExport = normPages.map((pg) => ({
+          page: pg,
+          graph: pg.id === activePageId ? liveGraphRef.current : filterGraphByPage(fullGraph, pg.id),
+        }));
+      } else {
+        pagesToExport = [{ page: currentPage, graph: liveGraphRef.current }];
+      }
+
+      const filename = exportBoardToPDF({
+        board,
+        pagesToExport,
+        orientation: pdfOrientation,
+        printWhiteBackground: pdfWhiteBg,
+        theme,
+        includeSummaryPage: pdfIncludeSummary,
+      });
+      setShowPdfMenu(false);
+      onNotify?.(`Exported PDF report "${filename}".`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to generate PDF.';
+      onNotify?.(`PDF export failed: ${msg}`);
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   // Sweep-erase strokes along world segment (x1,y1)->(x2,y2)
   const applyEraserSweep = useCallback(
     (x1: number, y1: number, x2: number, y2: number, onlyHighlight: boolean): boolean => {
@@ -485,26 +757,159 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     []
   );
 
-  // Search matching set
-  const matchingNodeIds = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return null;
-    const set = new Set<string>();
+  const availableSearchTags = useMemo(() => {
+    const tags = new Set<string>();
     for (const n of graph.nodes) {
-      const metaStr = Object.entries(n.metadata || {})
-        .map(([k, v]) => `${k}:${v}`)
-        .join(' ')
-        .toLowerCase();
-      if (
-        n.text.toLowerCase().includes(q) ||
-        n.tags.some((t) => t.toLowerCase().includes(q)) ||
-        metaStr.includes(q)
-      ) {
+      for (const t of n.tags) if (t.trim()) tags.add(t.trim());
+    }
+    for (const s of graph.stickies) {
+      for (const t of s.tags ?? []) if (t.trim()) tags.add(t.trim());
+    }
+    return [...tags].sort();
+  }, [graph.nodes, graph.stickies]);
+
+  const availableSearchColors = useMemo(() => {
+    const colors = new Set<string>();
+    for (const n of graph.nodes) {
+      if (n.filled !== false && n.color) colors.add(n.color.toLowerCase());
+      if (n.borderColor) colors.add(n.borderColor.toLowerCase());
+    }
+    for (const s of graph.stickies) {
+      if (s.color) colors.add(s.color.toLowerCase());
+    }
+    return [...colors].slice(0, 10);
+  }, [graph.nodes, graph.stickies]);
+
+  const hasSearchFilter =
+    Boolean(searchQuery.trim()) ||
+    searchTypeFilter !== 'all' ||
+    searchStyleFilter !== 'any' ||
+    searchShapeFilter !== 'all' ||
+    searchColorFilter !== 'all' ||
+    searchTagFilter !== 'all';
+
+  // Search & filter matching set (covers BOTH nodes and sticky notes as first-class entities)
+  const { matchingEntityIds, matchingEntityList } = useMemo(() => {
+    if (!hasSearchFilter) {
+      return {
+        matchingEntityIds: null as Set<string> | null,
+        matchingEntityList: [] as { id: string; kind: 'node' | 'sticky'; x: number; y: number }[],
+      };
+    }
+
+    const q = searchQuery.trim().toLowerCase();
+    const deg = new Map<string, number>();
+    for (const e of graph.edges) {
+      deg.set(e.a, (deg.get(e.a) ?? 0) + 1);
+      deg.set(e.b, (deg.get(e.b) ?? 0) + 1);
+    }
+
+    const set = new Set<string>();
+    const list: { id: string; kind: 'node' | 'sticky'; x: number; y: number }[] = [];
+
+    if (searchTypeFilter !== 'stickies') {
+      for (const n of graph.nodes) {
+        if (searchStyleFilter === 'filled' && n.filled === false) continue;
+        if (searchStyleFilter === 'unfilled' && n.filled !== false) continue;
+        if (searchStyleFilter === 'connected' && (deg.get(n.id) ?? 0) === 0) continue;
+        if (searchStyleFilter === 'isolated' && (deg.get(n.id) ?? 0) > 0) continue;
+        if (searchShapeFilter === 'sticky') continue;
+        if (searchShapeFilter !== 'all' && n.shape !== searchShapeFilter) continue;
+        if (
+          searchColorFilter !== 'all' &&
+          n.color.toLowerCase() !== searchColorFilter &&
+          (n.borderColor ?? '').toLowerCase() !== searchColorFilter
+        ) {
+          continue;
+        }
+        if (searchTagFilter !== 'all' && !n.tags.some((t) => t.trim() === searchTagFilter)) {
+          continue;
+        }
+
+        if (q) {
+          const metaStr = Object.entries(n.metadata || {})
+            .map(([k, v]) => `${k}:${v}`)
+            .join(' ')
+            .toLowerCase();
+          const hitsQuery =
+            n.text.toLowerCase().includes(q) ||
+            n.shape.toLowerCase().includes(q) ||
+            n.tags.some((t) => t.toLowerCase().includes(q)) ||
+            metaStr.includes(q);
+          if (!hitsQuery) continue;
+        }
+
         set.add(n.id);
+        list.push({ id: n.id, kind: 'node', x: n.x, y: n.y });
       }
     }
-    return set;
-  }, [graph.nodes, searchQuery]);
+
+    if (searchTypeFilter !== 'nodes') {
+      for (const s of graph.stickies) {
+        if (searchStyleFilter === 'filled' || searchStyleFilter === 'unfilled') continue;
+        if (searchStyleFilter === 'connected' && (deg.get(s.id) ?? 0) === 0) continue;
+        if (searchStyleFilter === 'isolated' && (deg.get(s.id) ?? 0) > 0) continue;
+        if (searchShapeFilter !== 'all' && searchShapeFilter !== 'sticky') continue;
+        if (searchColorFilter !== 'all' && s.color.toLowerCase() !== searchColorFilter) continue;
+        if (
+          searchTagFilter !== 'all' &&
+          !(s.tags ?? []).some((t) => t.trim() === searchTagFilter)
+        ) {
+          continue;
+        }
+
+        if (q) {
+          const hitsQuery =
+            s.text.toLowerCase().includes(q) ||
+            'sticky note'.includes(q) ||
+            (s.tags ?? []).some((t) => t.toLowerCase().includes(q));
+          if (!hitsQuery) continue;
+        }
+
+        set.add(s.id);
+        list.push({ id: s.id, kind: 'sticky', x: s.x, y: s.y });
+      }
+    }
+
+    return { matchingEntityIds: set, matchingEntityList: list };
+  }, [
+    graph.edges,
+    graph.nodes,
+    graph.stickies,
+    hasSearchFilter,
+    searchColorFilter,
+    searchQuery,
+    searchShapeFilter,
+    searchStyleFilter,
+    searchTagFilter,
+    searchTypeFilter,
+  ]);
+
+  const jumpToSearchMatch = (idxOffset: number) => {
+    if (matchingEntityList.length === 0 || !containerRef.current) return;
+    const nextIdx = (searchMatchIdx + idxOffset + matchingEntityList.length) % matchingEntityList.length;
+    setSearchMatchIdx(nextIdx);
+    const target = matchingEntityList[nextIdx];
+    const rect = containerRef.current.getBoundingClientRect();
+    const cam = cameraRef.current;
+    cam.ox = rect.width / 2 - target.x * cam.scale;
+    cam.oy = rect.height / 2 - target.y * cam.scale;
+    if (target.kind === 'node') {
+      onSelectionChange([target.id], null, null);
+    } else {
+      onSelectionChange([], null, target.id);
+    }
+  };
+
+  const resetSearchFilters = () => {
+    setSearchQuery('');
+    setSearchTypeFilter('all');
+    setSearchStyleFilter('any');
+    setSearchShapeFilter('all');
+    setSearchColorFilter('all');
+    setSearchTagFilter('all');
+    setSearchMatchIdx(0);
+  };
 
   // Legend entries
   const legendEntries = useMemo(() => {
@@ -566,7 +971,144 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
-    // Check Mindmap Collapse Toggle Badge first
+    // Active Draw / Erase / Create tools take precedence over node/badge clicks so users can draw freely OVER any element
+    if (tool === 'add_node') {
+      const now = Date.now();
+      const newNode: GraphNode = {
+        id: makeSafeId('n'),
+        x: snapCoord(wx),
+        y: snapCoord(wy),
+        w: 156,
+        h: 60,
+        text: `Node ${g.nodes.length + 1}`,
+        shape: 'rounded',
+        color: '#dbeafe',
+        icon: '',
+        iconPosition: 'inline',
+        tags: [],
+        metadata: {},
+        layer: 'Data',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const next = { ...g, nodes: [...g.nodes, newNode] };
+      liveGraphRef.current = next;
+      onSelectionChange([newNode.id], null, null);
+      onCommitGraph(next, true);
+      setTool('select');
+      return;
+    }
+
+    if (tool === 'draw_shape') {
+      const sxWorld = snapCoord(wx);
+      const syWorld = snapCoord(wy);
+      gestureRef.current = {
+        mode: 'draw_shape',
+        startWx: sxWorld,
+        startWy: syWorld,
+        currWx: sxWorld,
+        currWy: syWorld,
+      };
+      return;
+    }
+
+    if (tool === 'sticky') {
+      const now = Date.now();
+      const newSticky: StickyNote = {
+        id: makeSafeId('s'),
+        x: snapCoord(wx),
+        y: snapCoord(wy),
+        w: 176,
+        h: 112,
+        text: 'Sticky note...',
+        color: '#fef08a',
+        layer: 'Annotations',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const next = { ...g, stickies: [...g.stickies, newSticky] };
+      liveGraphRef.current = next;
+      onSelectionChange([], null, newSticky.id);
+      onCommitGraph(next, true);
+      setTool('select');
+      return;
+    }
+
+    if (tool === 'pen' || tool === 'highlight') {
+      const resolvedPenColor = penColor || (theme === 'light' ? '#1e293b' : '#f8fafc');
+      const stroke: FreehandStroke = {
+        id: makeSafeId('st'),
+        points: [{ x: wx, y: wy }],
+        color: tool === 'pen' ? resolvedPenColor : highlightColor || '#facc15',
+        width: tool === 'pen' ? penWidth : 16,
+        tool,
+        layer: 'Annotations',
+        createdAt: Date.now(),
+      };
+      gestureRef.current = { mode: 'draw_stroke', stroke };
+      return;
+    }
+
+    if (tool === 'eraser' || tool === 'highlight_eraser') {
+      const onlyHighlight = tool === 'highlight_eraser';
+      const erased = applyEraserSweep(wx, wy, wx, wy, onlyHighlight);
+      gestureRef.current = {
+        mode: 'erase_stroke',
+        onlyHighlight,
+        lastWx: wx,
+        lastWy: wy,
+        erasedAny: erased,
+      };
+      return;
+    }
+
+    // Check Selected Entity Resize Handles first in Select mode
+    if (tool === 'select') {
+      const handleTol = 11 / cameraRef.current.scale;
+      for (const rh of resizeHandlesRef.current) {
+        if (Math.hypot(wx - rh.x, wy - rh.y) <= handleTol) {
+          if (rh.entityKind === 'node') {
+            const target = g.nodes.find((n) => n.id === rh.id);
+            if (target && !target.locked) {
+              gestureRef.current = {
+                mode: 'resize_entity',
+                entityKind: 'node',
+                id: target.id,
+                handle: rh.handle,
+                startWx: wx,
+                startWy: wy,
+                origX: target.x,
+                origY: target.y,
+                origW: target.w,
+                origH: target.h,
+                moved: false,
+              };
+              return;
+            }
+          } else {
+            const target = g.stickies.find((s) => s.id === rh.id);
+            if (target) {
+              gestureRef.current = {
+                mode: 'resize_entity',
+                entityKind: 'sticky',
+                id: target.id,
+                handle: rh.handle,
+                startWx: wx,
+                startWy: wy,
+                origX: target.x,
+                origY: target.y,
+                origW: target.w,
+                origH: target.h,
+                moved: false,
+              };
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    // Check Mindmap Collapse Toggle Badge
     for (const b of badgeHitsRef.current) {
       if (Math.hypot(wx - b.wx, wy - b.wy) <= b.r + 6) {
         const nextGraph: GraphDocument = {
@@ -598,114 +1140,62 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
-    // Tool: Add Node
-    if (tool === 'add_node') {
-      const now = Date.now();
-      const newNode: GraphNode = {
-        id: makeSafeId('n'),
-        x: snapCoord(wx),
-        y: snapCoord(wy),
-        w: 156,
-        h: 60,
-        text: `Node ${g.nodes.length + 1}`,
-        shape: 'rounded',
-        color: '#dbeafe',
-        icon: '',
-        iconPosition: 'inline',
-        tags: [],
-        metadata: {},
-        layer: 'Data',
-        createdAt: now,
-        updatedAt: now,
-      };
-      const next = { ...g, nodes: [...g.nodes, newNode] };
-      liveGraphRef.current = next;
-      onSelectionChange([newNode.id], null, null);
-      onCommitGraph(next, true);
-      setTool('select');
-      return;
-    }
-
-    // Tool: Sticky
-    if (tool === 'sticky') {
-      const now = Date.now();
-      const newSticky: StickyNote = {
-        id: makeSafeId('s'),
-        x: snapCoord(wx),
-        y: snapCoord(wy),
-        w: 176,
-        h: 112,
-        text: 'Sticky note...',
-        color: '#fef08a',
-        layer: 'Annotations',
-        createdAt: now,
-        updatedAt: now,
-      };
-      const next = { ...g, stickies: [...g.stickies, newSticky] };
-      liveGraphRef.current = next;
-      onSelectionChange([], null, newSticky.id);
-      onCommitGraph(next, true);
-      setTool('select');
-      return;
-    }
-
-    // Tool: Pen or Highlight
-    if (tool === 'pen' || tool === 'highlight') {
-      const stroke: FreehandStroke = {
-        id: makeSafeId('st'),
-        points: [{ x: wx, y: wy }],
-        color: tool === 'pen' ? (theme === 'light' ? '#1e293b' : '#f8fafc') : '#facc15',
-        width: tool === 'pen' ? 3 : 16,
-        tool,
-        layer: 'Annotations',
-        createdAt: Date.now(),
-      };
-      gestureRef.current = { mode: 'draw_stroke', stroke };
-      return;
-    }
-
-    // Tool: Eraser or Highlighter Eraser
-    if (tool === 'eraser' || tool === 'highlight_eraser') {
-      const onlyHighlight = tool === 'highlight_eraser';
-      const erased = applyEraserSweep(wx, wy, wx, wy, onlyHighlight);
-      gestureRef.current = {
-        mode: 'erase_stroke',
-        onlyHighlight,
-        lastWx: wx,
-        lastWy: wy,
-        erasedAny: erased,
-      };
-      return;
-    }
-
-    // Compute visible nodes (excluding collapsed mindmap subtrees)
+    // Compute visible nodes (excluding collapsed mindmap subtrees) & stickies
     const { hiddenNodes } = computeMindmapVisibility(g.nodes, g.edges);
     const visibleNodes = g.nodes.filter(
       (n) => !hiddenNodes.has(n.id) && isLayerInteractive(n.layer)
     );
+    const visibleStickies = g.stickies.filter((s) => isLayerInteractive(s.layer));
 
-    // Hit-test nodes (top-most last)
-    let hitNode: GraphNode | null = null;
+    // Hit-test filled nodes first, then stickies, then unfilled outline shapes (so inner items inside an unfilled frame stay clickable!)
+    let hitFilledNode: GraphNode | null = null;
+    let hitUnfilledNode: GraphNode | null = null;
     for (let i = visibleNodes.length - 1; i >= 0; i--) {
-      if (hitTestNode(wx, wy, visibleNodes[i])) {
-        hitNode = visibleNodes[i];
+      const candidate = visibleNodes[i];
+      if (!hitTestNode(wx, wy, candidate)) continue;
+      if (candidate.filled === false) {
+        if (!hitUnfilledNode) hitUnfilledNode = candidate;
+      } else {
+        hitFilledNode = candidate;
         break;
       }
     }
 
-    // Tool: Connect
+    let hitSticky: StickyNote | null = null;
+    if (!hitFilledNode) {
+      for (let i = visibleStickies.length - 1; i >= 0; i--) {
+        if (hitTestSticky(wx, wy, visibleStickies[i])) {
+          hitSticky = visibleStickies[i];
+          break;
+        }
+      }
+    }
+
+    const hitNode = hitFilledNode ?? (!hitSticky ? hitUnfilledNode : null);
+
+    // Tool: Connect (supports both Nodes and Sticky Notes!)
     if (tool === 'connect') {
-      if (hitNode) {
+      const targetEntity = hitNode
+        ? { id: hitNode.id, kind: 'node' as const }
+        : hitSticky
+        ? { id: hitSticky.id, kind: 'sticky' as const }
+        : null;
+
+      if (targetEntity) {
         if (!connectSourceId) {
-          setConnectSourceId(hitNode.id);
-          onSelectionChange([hitNode.id], null, null);
+          setConnectSourceId(targetEntity.id);
+          if (targetEntity.kind === 'node') {
+            onSelectionChange([targetEntity.id], null, null);
+          } else {
+            onSelectionChange([], null, targetEntity.id);
+          }
         } else {
           const now = Date.now();
           const newEdge: GraphEdge = {
             id: makeSafeId('e'),
             a: connectSourceId,
-            b: hitNode.id,
-            label: connectSourceId === hitNode.id ? 'Self-Loop' : '',
+            b: targetEntity.id,
+            label: connectSourceId === targetEntity.id ? 'Self-Loop' : '',
             color: '#475569',
             width: 2,
             arrow: 'forward',
@@ -728,7 +1218,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
-    // Tool: Select
+    // Tool: Select -> Node
     if (hitNode) {
       const now = Date.now();
       if (lastTapRef.current.id === hitNode.id && now - lastTapRef.current.time < 320) {
@@ -765,15 +1255,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
-    // Hit-test sticky notes
-    const visibleStickies = g.stickies.filter((s) => isLayerInteractive(s.layer));
-    let hitSticky: StickyNote | null = null;
-    for (let i = visibleStickies.length - 1; i >= 0; i--) {
-      if (hitTestSticky(wx, wy, visibleStickies[i])) {
-        hitSticky = visibleStickies[i];
-        break;
-      }
-    }
+    // Tool: Select -> Sticky Note
     if (hitSticky) {
       const now = Date.now();
       if (lastTapRef.current.id === hitSticky.id && now - lastTapRef.current.time < 320) {
@@ -795,8 +1277,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
-    // Hit-test edges
-    const nodeMap = new Map(g.nodes.map((n) => [n.id, n]));
+    // Hit-test edges (supports both Node and Sticky endpoints)
+    const entityMap = buildEntityMap(g.nodes, g.stickies);
     const visibleEdges = g.edges.filter(
       (edge) =>
         !hiddenNodes.has(edge.a) &&
@@ -808,7 +1290,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     let hitEdge: GraphEdge | null = null;
     for (let i = visibleEdges.length - 1; i >= 0; i--) {
       const edge = visibleEdges[i];
-      const geom = computeEdgeGeometry(edge, nodeMap, parallelMap.get(edge.id));
+      const geom = computeEdgeGeometry(edge, entityMap, parallelMap.get(edge.id));
       if (geom && hitTestEdge(wx, wy, geom, edge, tol)) {
         hitEdge = edge;
         break;
@@ -909,12 +1391,59 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       return;
     }
 
+    if (gest.mode === 'resize_entity') {
+      const minW = gest.entityKind === 'sticky' ? 72 : 32;
+      const minH = gest.entityKind === 'sticky' ? 52 : 28;
+      let left = gest.origX - gest.origW / 2;
+      let right = gest.origX + gest.origW / 2;
+      let top = gest.origY - gest.origH / 2;
+      let bottom = gest.origY + gest.origH / 2;
+      const sxSnap = snapCoord(wx);
+      const sySnap = snapCoord(wy);
+
+      if (gest.handle.includes('w')) left = Math.min(right - minW, sxSnap);
+      if (gest.handle.includes('e')) right = Math.max(left + minW, sxSnap);
+      if (gest.handle.includes('n')) top = Math.min(bottom - minH, sySnap);
+      if (gest.handle.includes('s')) bottom = Math.max(top + minH, sySnap);
+
+      const nextX = (left + right) / 2;
+      const nextY = (top + bottom) / 2;
+      const nextW = Math.round(right - left);
+      const nextH = Math.round(bottom - top);
+      if (Math.hypot(wx - gest.startWx, wy - gest.startWy) > 1.5) gest.moved = true;
+
+      const g = liveGraphRef.current;
+      if (gest.entityKind === 'node') {
+        liveGraphRef.current = {
+          ...g,
+          nodes: g.nodes.map((n) =>
+            n.id === gest.id ? { ...n, x: nextX, y: nextY, w: nextW, h: nextH } : n
+          ),
+        };
+      } else {
+        liveGraphRef.current = {
+          ...g,
+          stickies: g.stickies.map((s) =>
+            s.id === gest.id ? { ...s, x: nextX, y: nextY, w: nextW, h: nextH } : s
+          ),
+        };
+      }
+      return;
+    }
+
+    if (gest.mode === 'draw_shape') {
+      gest.currWx = snapCoord(wx);
+      gest.currWy = snapCoord(wy);
+      return;
+    }
+
     if (gest.mode === 'drag_edge_curve') {
       const g = liveGraphRef.current;
       const edge = g.edges.find((item) => item.id === gest.id);
       if (edge) {
-        const src = g.nodes.find((n) => n.id === edge.a);
-        const dst = g.nodes.find((n) => n.id === edge.b);
+        const entityMap = buildEntityMap(g.nodes, g.stickies);
+        const src = entityMap.get(edge.a);
+        const dst = entityMap.get(edge.b);
         if (src && dst) {
           const nextCurvature = computeEdgeCurvatureFromPoint(
             src,
@@ -999,6 +1528,74 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         liveGraphRef.current = committed;
         onCommitGraph(committed, true);
       }
+      return;
+    }
+
+    if (gest.mode === 'resize_entity') {
+      gestureRef.current = { mode: 'none' };
+      if (gest.moved) {
+        const now = Date.now();
+        const committed: GraphDocument = {
+          ...liveGraphRef.current,
+          nodes:
+            gest.entityKind === 'node'
+              ? liveGraphRef.current.nodes.map((n) =>
+                  n.id === gest.id ? { ...n, updatedAt: now } : n
+                )
+              : liveGraphRef.current.nodes,
+          stickies:
+            gest.entityKind === 'sticky'
+              ? liveGraphRef.current.stickies.map((s) =>
+                  s.id === gest.id ? { ...s, updatedAt: now } : s
+                )
+              : liveGraphRef.current.stickies,
+        };
+        liveGraphRef.current = committed;
+        onCommitGraph(committed, true);
+      }
+      return;
+    }
+
+    if (gest.mode === 'draw_shape') {
+      gestureRef.current = { mode: 'none' };
+      const rawW = Math.abs(gest.currWx - gest.startWx);
+      const rawH = Math.abs(gest.currWy - gest.startWy);
+      const isClick = rawW < 10 && rawH < 10;
+      const cfg = drawShapeConfigRef.current;
+      const isCompactSquare =
+        cfg.shape === 'circle' || cfg.shape === 'square' || cfg.shape === 'diamond' || cfg.shape === 'star';
+      const w = isClick ? (isCompactSquare ? 100 : 156) : Math.max(32, Math.round(rawW));
+      const h = isClick ? (isCompactSquare ? 100 : 88) : Math.max(28, Math.round(rawH));
+      const cx = isClick ? gest.startWx : (gest.startWx + gest.currWx) / 2;
+      const cy = isClick ? gest.startWy : (gest.startWy + gest.currWy) / 2;
+      const now = Date.now();
+      const newShapeNode: GraphNode = {
+        id: makeSafeId('n'),
+        x: cx,
+        y: cy,
+        w,
+        h,
+        text: '',
+        shape: cfg.shape,
+        color: cfg.fillColor,
+        filled: cfg.filled,
+        borderColor: cfg.borderColor,
+        borderWidth: cfg.borderWidth,
+        icon: '',
+        iconPosition: 'inline',
+        tags: [],
+        metadata: {},
+        layer: 'Data',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const next: GraphDocument = {
+        ...liveGraphRef.current,
+        nodes: [...liveGraphRef.current.nodes, newShapeNode],
+      };
+      liveGraphRef.current = next;
+      onSelectionChange([newShapeNode.id], null, null);
+      onCommitGraph(next, true);
       return;
     }
 
@@ -1133,33 +1730,15 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
           const layerVisible = new Map(g.layers.map((l) => [l.name, l.visible]));
           const { hiddenNodes, childCounts } = computeMindmapVisibility(g.nodes, g.edges);
-          const nodeMap = new Map(g.nodes.map((n) => [n.id, n]));
+          const nodeMap = buildEntityMap(g.nodes, g.stickies);
           const selNodeSet = new Set(selectedNodeIds);
 
-          // 1. Freehand strokes (Background/Data/Annotations)
           const allStrokes =
             gestureRef.current.mode === 'draw_stroke'
               ? [...g.strokes, gestureRef.current.stroke]
               : g.strokes;
 
-          for (const st of allStrokes) {
-            if (layerVisible.get(st.layer) === false || st.points.length < 2) continue;
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(st.points[0].x, st.points[0].y);
-            for (let i = 1; i < st.points.length; i++) {
-              ctx.lineTo(st.points[i].x, st.points[i].y);
-            }
-            ctx.strokeStyle = st.color;
-            ctx.lineWidth = st.width;
-            ctx.lineCap = 'round';
-            ctx.lineJoin = 'round';
-            ctx.globalAlpha = st.tool === 'highlight' ? 0.35 : 0.92;
-            ctx.stroke();
-            ctx.restore();
-          }
-
-          // 2. Edges
+          // 1. Edges (rendered under nodes, stickies, and strokes)
           const visibleEdges = g.edges.filter(
             (e) =>
               layerVisible.get(e.layer) !== false &&
@@ -1198,9 +1777,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             const isSelected = edge.id === selectedEdgeId;
             const isAlgoHighlighted = highlightedEdgeIds.has(edge.id);
             const dimmed =
-              matchingNodeIds &&
-              !matchingNodeIds.has(edge.a) &&
-              !matchingNodeIds.has(edge.b);
+              matchingEntityIds &&
+              !matchingEntityIds.has(edge.a) &&
+              !matchingEntityIds.has(edge.b);
 
             ctx.save();
             ctx.globalAlpha = dimmed ? 0.18 : 1;
@@ -1362,7 +1941,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             }
           }
 
-          // 3. Nodes (with viewport culling & presence selection rings)
+          // 2. Nodes & Shapes (layer-ordered with viewport culling & presence selection rings)
           const badgeHits: BadgeHitTarget[] = [];
           const presenceByNode = new Map<string, CollabPresence[]>();
           for (const p of presence) {
@@ -1373,7 +1952,13 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             }
           }
 
-          for (const node of g.nodes) {
+          const layerRank = (layer: CanvasLayerName) =>
+            layer === 'Background' ? 0 : layer === 'Data' ? 1 : 2;
+          const orderedNodes = [...g.nodes].sort(
+            (a, b) => layerRank(a.layer) - layerRank(b.layer)
+          );
+
+          for (const node of orderedNodes) {
             if (hiddenNodes.has(node.id) || layerVisible.get(node.layer) === false) continue;
             if (
               node.x + node.w / 2 < viewMinX ||
@@ -1387,10 +1972,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             const isSelected = selNodeSet.has(node.id);
             const isAlgoHighlight = highlightedNodeIds.has(node.id);
             const isConnectSrc = connectSourceId === node.id;
-            const dimmed = matchingNodeIds ? !matchingNodeIds.has(node.id) : false;
+            const dimmed = matchingEntityIds ? !matchingEntityIds.has(node.id) : false;
 
             ctx.save();
-            ctx.globalAlpha = dimmed ? 0.2 : 1;
+            ctx.globalAlpha = dimmed ? 0.16 : 1;
 
             // Collaborator live presence ring + pill
             const collabs = presenceByNode.get(node.id);
@@ -1443,16 +2028,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               ctx.restore();
             }
 
-            // Draw Node Shape
+            // Draw Node Shape (filled or outline)
             const fill = theme === 'high_contrast' ? '#000000' : node.color || '#dbeafe';
             const border =
               theme === 'high_contrast'
                 ? '#ffffff'
                 : isSelected
                 ? '#2563eb'
-                : theme === 'dark'
-                ? '#475569'
-                : '#334155';
+                : node.borderColor || (theme === 'dark' ? '#64748b' : '#334155');
 
             drawNodeShape(ctx, node, fill, border);
 
@@ -1520,7 +2103,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           }
           badgeHitsRef.current = badgeHits;
 
-          // 4. Sticky Notes
+          // 3. Sticky Notes (first-class graph entities: search fading, connect rings, tags)
           for (const sticky of g.stickies) {
             if (layerVisible.get(sticky.layer) === false) continue;
             if (
@@ -1531,13 +2114,36 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             ) {
               continue;
             }
+            const isSelected = sticky.id === selectedStickyId;
+            const isAlgoHighlight = highlightedNodeIds.has(sticky.id);
+            const isConnectSrc = connectSourceId === sticky.id;
+            const dimmed = matchingEntityIds ? !matchingEntityIds.has(sticky.id) : false;
+
             ctx.save();
+            ctx.globalAlpha = dimmed ? 0.16 : 1;
+
+            if (isSelected || isAlgoHighlight || isConnectSrc) {
+              ctx.save();
+              ctx.strokeStyle = isAlgoHighlight ? '#f59e0b' : '#2563eb';
+              ctx.lineWidth = 3;
+              drawRoundedRect(
+                ctx,
+                sticky.x - sticky.w / 2 - 5,
+                sticky.y - sticky.h / 2 - 5,
+                sticky.w + 10,
+                sticky.h + 10,
+                12
+              );
+              ctx.stroke();
+              ctx.restore();
+            }
+
             ctx.shadowColor = 'rgba(15, 23, 42, 0.14)';
             ctx.shadowBlur = 10;
             ctx.shadowOffsetY = 4;
             ctx.fillStyle = sticky.color || '#fef08a';
-            ctx.strokeStyle = sticky.id === selectedStickyId ? '#2563eb' : 'rgba(15,23,42,0.16)';
-            ctx.lineWidth = sticky.id === selectedStickyId ? 2.5 : 1;
+            ctx.strokeStyle = isSelected ? '#2563eb' : 'rgba(15,23,42,0.18)';
+            ctx.lineWidth = isSelected ? 2.2 : 1;
             drawRoundedRect(
               ctx,
               sticky.x - sticky.w / 2,
@@ -1557,14 +2163,174 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             ctx.textBaseline = 'top';
             const lines = wrapTextLines(ctx, sticky.text, sticky.w - 20);
             const lh = 16;
-            const maxLines = Math.max(1, Math.floor((sticky.h - 16) / lh));
+            const hasTags = (sticky.tags?.length ?? 0) > 0;
+            const reservedBottom = hasTags ? 24 : 12;
+            const maxLines = Math.max(1, Math.floor((sticky.h - 10 - reservedBottom) / lh));
             lines.slice(0, maxLines).forEach((ln, idx) => {
               ctx.fillText(ln, sticky.x - sticky.w / 2 + 10, sticky.y - sticky.h / 2 + 10 + idx * lh);
             });
+
+            if (hasTags && sticky.h >= 64) {
+              const tagLabel = sticky.tags!.slice(0, 3).map((t) => `#${t}`).join(' ');
+              ctx.font = '600 10px "JetBrains Mono", monospace';
+              ctx.fillStyle = 'rgba(30, 41, 59, 0.65)';
+              ctx.textBaseline = 'bottom';
+              ctx.fillText(
+                tagLabel,
+                sticky.x - sticky.w / 2 + 10,
+                sticky.y + sticky.h / 2 - 7,
+                sticky.w - 20
+              );
+            }
             ctx.restore();
           }
 
-          // 5. Marquee Selection Box
+          // 4. Highlighter Strokes (drawn over nodes/stickies with translucent ink)
+          for (const st of allStrokes) {
+            if (st.tool !== 'highlight' || layerVisible.get(st.layer) === false || st.points.length < 2) {
+              continue;
+            }
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(st.points[0].x, st.points[0].y);
+            for (let i = 1; i < st.points.length; i++) {
+              ctx.lineTo(st.points[i].x, st.points[i].y);
+            }
+            ctx.strokeStyle = st.color;
+            ctx.lineWidth = st.width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalAlpha = matchingEntityIds ? 0.14 : 0.34;
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // 5. Pen Strokes (drawn ON TOP of edges, nodes, stickies, and highlights)
+          for (const st of allStrokes) {
+            if (st.tool === 'highlight' || layerVisible.get(st.layer) === false || st.points.length < 2) {
+              continue;
+            }
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(st.points[0].x, st.points[0].y);
+            for (let i = 1; i < st.points.length; i++) {
+              ctx.lineTo(st.points[i].x, st.points[i].y);
+            }
+            ctx.strokeStyle = st.color;
+            ctx.lineWidth = st.width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.globalAlpha = matchingEntityIds ? 0.35 : 0.94;
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // 6. Live Draw Shape Rubber-band Preview
+          if (gestureRef.current.mode === 'draw_shape') {
+            const ds = gestureRef.current;
+            const cfg = drawShapeConfigRef.current;
+            const previewW = Math.max(24, Math.abs(ds.currWx - ds.startWx));
+            const previewH = Math.max(20, Math.abs(ds.currWy - ds.startWy));
+            const previewCx = (ds.startWx + ds.currWx) / 2;
+            const previewCy = (ds.startWy + ds.currWy) / 2;
+            const previewNode: GraphNode = {
+              id: '_preview',
+              x: previewCx,
+              y: previewCy,
+              w: previewW,
+              h: previewH,
+              text: '',
+              shape: cfg.shape,
+              color: cfg.fillColor,
+              filled: cfg.filled,
+              borderColor: cfg.borderColor,
+              borderWidth: cfg.borderWidth,
+              tags: [],
+              metadata: {},
+              layer: 'Data',
+              createdAt: 0,
+              updatedAt: 0,
+            };
+            ctx.save();
+            ctx.globalAlpha = 0.85;
+            drawNodeShape(ctx, previewNode, cfg.fillColor, cfg.borderColor);
+            ctx.setLineDash([4 / cam.scale, 3 / cam.scale]);
+            ctx.strokeStyle = 'rgba(37, 99, 235, 0.55)';
+            ctx.lineWidth = 1 / cam.scale;
+            ctx.strokeRect(
+              previewCx - previewW / 2,
+              previewCy - previewH / 2,
+              previewW,
+              previewH
+            );
+            ctx.setLineDash([]);
+            ctx.font = '600 10px "JetBrains Mono", monospace';
+            const sizeBadge = `${Math.round(previewW)} × ${Math.round(previewH)}`;
+            const sbw = ctx.measureText(sizeBadge).width + 10;
+            ctx.fillStyle = '#0f172a';
+            drawRoundedRect(ctx, previewCx - sbw / 2, previewCy + previewH / 2 + 8, sbw, 18, 5);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(sizeBadge, previewCx, previewCy + previewH / 2 + 17);
+            ctx.restore();
+          }
+
+          // 7. 8-Point Resize Handles for single selected Node/Shape or Sticky Note
+          const nextResizeHandles: ResizeHitTarget[] = [];
+          if (tool === 'select') {
+            let targetBox: { kind: 'node' | 'sticky'; id: string; x: number; y: number; w: number; h: number } | null =
+              null;
+            if (selectedNodeIds.length === 1) {
+              const n = g.nodes.find((item) => item.id === selectedNodeIds[0]);
+              const l = n ? g.layers.find((ly) => ly.name === n.layer) : undefined;
+              if (n && !n.locked && !hiddenNodes.has(n.id) && (!l || (l.visible && !l.locked))) {
+                targetBox = { kind: 'node', id: n.id, x: n.x, y: n.y, w: n.w, h: n.h };
+              }
+            } else if (selectedStickyId) {
+              const s = g.stickies.find((item) => item.id === selectedStickyId);
+              const l = s ? g.layers.find((ly) => ly.name === s.layer) : undefined;
+              if (s && (!l || (l.visible && !l.locked))) {
+                targetBox = { kind: 'sticky', id: s.id, x: s.x, y: s.y, w: s.w, h: s.h };
+              }
+            }
+
+            if (targetBox) {
+              const hw = targetBox.w / 2;
+              const hh = targetBox.h / 2;
+              const pts: { dir: ResizeHandleDir; x: number; y: number }[] = [
+                { dir: 'nw', x: targetBox.x - hw, y: targetBox.y - hh },
+                { dir: 'n', x: targetBox.x, y: targetBox.y - hh },
+                { dir: 'ne', x: targetBox.x + hw, y: targetBox.y - hh },
+                { dir: 'e', x: targetBox.x + hw, y: targetBox.y },
+                { dir: 'se', x: targetBox.x + hw, y: targetBox.y + hh },
+                { dir: 's', x: targetBox.x, y: targetBox.y + hh },
+                { dir: 'sw', x: targetBox.x - hw, y: targetBox.y + hh },
+                { dir: 'w', x: targetBox.x - hw, y: targetBox.y },
+              ];
+              const hs = 7 / cam.scale;
+              ctx.save();
+              ctx.fillStyle = '#ffffff';
+              ctx.strokeStyle = '#2563eb';
+              ctx.lineWidth = 1.6 / cam.scale;
+              for (const pt of pts) {
+                nextResizeHandles.push({
+                  entityKind: targetBox.kind,
+                  id: targetBox.id,
+                  handle: pt.dir,
+                  x: pt.x,
+                  y: pt.y,
+                });
+                ctx.fillRect(pt.x - hs / 2, pt.y - hs / 2, hs, hs);
+                ctx.strokeRect(pt.x - hs / 2, pt.y - hs / 2, hs, hs);
+              }
+              ctx.restore();
+            }
+          }
+          resizeHandlesRef.current = nextResizeHandles;
+
+          // 8. Marquee Selection Box
           if (gestureRef.current.mode === 'marquee') {
             const m = gestureRef.current;
             const mx = Math.min(m.startWx, m.currWx);
@@ -1581,7 +2347,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             ctx.restore();
           }
 
-          // 6. Eraser / Highlighter Eraser Cursor Ring
+          // 9. Eraser / Highlighter Eraser Cursor Ring
           if ((tool === 'eraser' || tool === 'highlight_eraser') && pointerWorldRef.current) {
             const p = pointerWorldRef.current;
             const r = (tool === 'highlight_eraser' ? 16 : 14) / cam.scale;
@@ -1620,7 +2386,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     connectSourceId,
     highlightedEdgeIds,
     highlightedNodeIds,
-    matchingNodeIds,
+    matchingEntityIds,
     presence,
     selectedEdgeId,
     selectedNodeIds,
@@ -1925,19 +2691,30 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           <div className="w-px h-4 bg-slate-200 dark:bg-slate-700 mx-0.5" />
 
           <button
-            onClick={() => setShowSearch((s) => !s)}
-            title="Search & Filter Nodes (Ctrl+F)"
-            className={`p-1.5 rounded-lg transition-colors ${
-              showSearch || searchQuery
+            onClick={() => {
+              setShowSearch((s) => !s);
+              setShowLayersPanel(false);
+              setShowPdfMenu(false);
+            }}
+            title="Search & Filter Nodes & Stickies (Ctrl+F)"
+            className={`relative p-1.5 rounded-lg transition-colors ${
+              showSearch || hasSearchFilter
                 ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
                 : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
           >
             <Search className="w-4 h-4" />
+            {hasSearchFilter && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-600" />
+            )}
           </button>
 
           <button
-            onClick={() => setShowLayersPanel((s) => !s)}
+            onClick={() => {
+              setShowLayersPanel((s) => !s);
+              setShowSearch(false);
+              setShowPdfMenu(false);
+            }}
             title="Layers & Alignment"
             className={`p-1.5 rounded-lg transition-colors ${
               showLayersPanel
@@ -1946,6 +2723,23 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             }`}
           >
             <Layers className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={() => {
+              setShowPdfMenu((s) => !s);
+              setShowLayersPanel(false);
+              setShowSearch(false);
+            }}
+            title="Export Board as PDF Report"
+            className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-lg transition-colors ${
+              showPdfMenu
+                ? 'bg-blue-50 dark:bg-blue-950/50 text-blue-600 dark:text-blue-400'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <FileDown className="w-3.5 h-3.5" />
+            <span>PDF</span>
           </button>
 
           <button
@@ -1984,32 +2778,301 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         </div>
       </div>
 
-      {/* Search / Filter Floating Bar */}
-      {showSearch && (
-        <div className="absolute top-16 right-3 z-20 w-72 p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm flex items-center gap-2">
-          <Search className="w-4 h-4 text-slate-400 shrink-0" />
-          <input
-            type="text"
-            autoFocus
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter by label, tag, metadata..."
-            className="flex-1 text-xs bg-transparent text-slate-900 dark:text-slate-100 focus:outline-none"
-          />
-          {searchQuery && (
-            <span className="text-[11px] font-mono text-slate-400 tabular-nums">
-              {matchingNodeIds?.size ?? 0}
-            </span>
+      {/* Export PDF Report Floating Popover */}
+      {showPdfMenu && (
+        <div className="absolute top-16 right-3 z-20 w-80 max-w-[calc(100vw-24px)] p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg space-y-3.5 text-xs text-slate-900 dark:text-slate-100">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 font-semibold text-sm">
+              <FileDown className="w-4 h-4 text-blue-600" />
+              <span>Export PDF Report</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowPdfMenu(false)}
+              className="p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {pages.length > 1 && fullGraph && (
+            <div className="space-y-1">
+              <label className="block text-[11px] font-medium text-slate-500">Page Scope</label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setPdfScope('current')}
+                  className={`py-1.5 px-2 rounded-lg border font-medium transition-colors ${
+                    pdfScope === 'current'
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  Current Page
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPdfScope('all')}
+                  className={`py-1.5 px-2 rounded-lg border font-medium transition-colors ${
+                    pdfScope === 'all'
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  All Pages ({pages.length})
+                </button>
+              </div>
+            </div>
           )}
+
+          <div className="space-y-1">
+            <label className="block text-[11px] font-medium text-slate-500">Page Orientation</label>
+            <div className="grid grid-cols-3 gap-1">
+              {(
+                [
+                  { id: 'auto', label: 'Auto Fit' },
+                  { id: 'landscape', label: 'Landscape' },
+                  { id: 'portrait', label: 'Portrait' },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setPdfOrientation(opt.id)}
+                  className={`py-1.5 rounded-lg border font-medium transition-colors ${
+                    pdfOrientation === opt.id
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-slate-700 dark:text-slate-300">Clean White Print Background</span>
+              <input
+                type="checkbox"
+                checked={pdfWhiteBg}
+                onChange={(e) => setPdfWhiteBg(e.target.checked)}
+                className="w-4 h-4 accent-blue-600"
+              />
+            </label>
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-slate-700 dark:text-slate-300">Include Report Summary Page</span>
+              <input
+                type="checkbox"
+                checked={pdfIncludeSummary}
+                onChange={(e) => setPdfIncludeSummary(e.target.checked)}
+                className="w-4 h-4 accent-blue-600"
+              />
+            </label>
+          </div>
+
           <button
-            onClick={() => {
-              setSearchQuery('');
-              setShowSearch(false);
-            }}
-            className="p-1 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+            type="button"
+            disabled={exportingPdf}
+            onClick={handleExportPdfReport}
+            className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold flex items-center justify-center gap-1.5 disabled:opacity-50"
           >
-            <X className="w-3.5 h-3.5" />
+            <FileDown className="w-3.5 h-3.5" />
+            {exportingPdf ? 'Generating PDF...' : 'Download PDF Report'}
           </button>
+        </div>
+      )}
+
+      {/* Search & Filter Floating Popover */}
+      {showSearch && (
+        <div className="absolute top-16 right-3 z-20 w-[320px] sm:w-[348px] max-w-[calc(100vw-24px)] p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-lg space-y-2.5 text-xs text-slate-900 dark:text-slate-100">
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <Search className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setSearchMatchIdx(0);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && matchingEntityList.length > 0) {
+                  e.preventDefault();
+                  jumpToSearchMatch(e.shiftKey ? -1 : 1);
+                }
+              }}
+              placeholder="Search nodes, stickies, tags, metadata..."
+              className="flex-1 min-w-0 text-xs bg-transparent text-slate-900 dark:text-slate-100 focus:outline-none"
+            />
+            {hasSearchFilter && (
+              <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 tabular-nums whitespace-nowrap">
+                {matchingEntityList.length > 0
+                  ? `${(searchMatchIdx % matchingEntityList.length) + 1}/${matchingEntityList.length}`
+                  : '0/0'}
+              </span>
+            )}
+            <button
+              type="button"
+              disabled={matchingEntityList.length === 0}
+              onClick={() => jumpToSearchMatch(-1)}
+              title="Previous Match"
+              className="p-0.5 rounded text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-35"
+            >
+              <ChevronUp className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              disabled={matchingEntityList.length === 0}
+              onClick={() => jumpToSearchMatch(1)}
+              title="Next Match"
+              className="p-0.5 rounded text-slate-500 hover:bg-slate-200 dark:hover:bg-slate-800 disabled:opacity-35"
+            >
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                resetSearchFilters();
+                setShowSearch(false);
+              }}
+              title="Close & Clear Filters"
+              className="p-0.5 rounded text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {/* Element Type Filter */}
+          <div className="grid grid-cols-3 gap-1">
+            {(
+              [
+                { id: 'all', label: 'All' },
+                { id: 'nodes', label: 'Nodes' },
+                { id: 'stickies', label: 'Stickies' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  setSearchTypeFilter(opt.id);
+                  setSearchMatchIdx(0);
+                }}
+                className={`py-1 rounded-lg font-medium border transition-colors ${
+                  searchTypeFilter === opt.id
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Style/State & Shape Selects */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <select
+              value={searchStyleFilter}
+              onChange={(e) => {
+                setSearchStyleFilter(
+                  e.target.value as 'any' | 'filled' | 'unfilled' | 'connected' | 'isolated'
+                );
+                setSearchMatchIdx(0);
+              }}
+              className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="any">Any Style / Links</option>
+              <option value="filled">Filled Shapes</option>
+              <option value="unfilled">Unfilled (Outline)</option>
+              <option value="connected">Connected Only</option>
+              <option value="isolated">Isolated Only</option>
+            </select>
+
+            <select
+              value={searchShapeFilter}
+              onChange={(e) => {
+                setSearchShapeFilter(e.target.value);
+                setSearchMatchIdx(0);
+              }}
+              className="px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs focus:outline-none focus:border-blue-500 capitalize"
+            >
+              <option value="all">All Shapes</option>
+              <option value="sticky">Sticky Note</option>
+              {ALL_NODE_SHAPES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Tag Filter */}
+          {availableSearchTags.length > 0 && (
+            <select
+              value={searchTagFilter}
+              onChange={(e) => {
+                setSearchTagFilter(e.target.value);
+                setSearchMatchIdx(0);
+              }}
+              className="w-full px-2 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs focus:outline-none focus:border-blue-500"
+            >
+              <option value="all">All Tags ({availableSearchTags.length})</option>
+              {availableSearchTags.map((t) => (
+                <option key={t} value={t}>
+                  #{t}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {/* Color Filter Swatches + Reset */}
+          <div className="flex items-center justify-between gap-2 pt-0.5">
+            <div className="flex items-center gap-1 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchColorFilter('all');
+                  setSearchMatchIdx(0);
+                }}
+                className={`px-1.5 py-0.5 rounded border text-[11px] font-medium ${
+                  searchColorFilter === 'all'
+                    ? 'border-blue-600 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-500'
+                }`}
+              >
+                All
+              </button>
+              {availableSearchColors.map((col) => (
+                <button
+                  key={col}
+                  type="button"
+                  onClick={() => {
+                    setSearchColorFilter(searchColorFilter === col ? 'all' : col);
+                    setSearchMatchIdx(0);
+                  }}
+                  title={`Filter by ${col}`}
+                  className={`w-4 h-4 rounded border transition-transform ${
+                    searchColorFilter === col
+                      ? 'border-blue-600 ring-2 ring-blue-500/40 scale-110'
+                      : 'border-slate-300 dark:border-slate-600'
+                  }`}
+                  style={{ backgroundColor: col }}
+                />
+              ))}
+            </div>
+
+            {hasSearchFilter && (
+              <button
+                type="button"
+                onClick={resetSearchFilters}
+                className="text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline whitespace-nowrap shrink-0"
+              >
+                Reset
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -2140,11 +3203,215 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
       {/* Connect Mode Banner */}
       {tool === 'connect' && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium shadow-sm">
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-20 px-3.5 py-1.5 rounded-lg bg-blue-600 text-white text-xs font-medium shadow-sm whitespace-nowrap">
           {connectSourceId
-            ? 'Click target node (or same node for self-loop)'
-            : 'Click source node to start connection'}
+            ? 'Click target node or sticky note (or same element for self-loop)'
+            : 'Click source node or sticky note to start connection'}
         </div>
+      )}
+
+      {/* Draw Shape Floating Config Bar */}
+      {tool === 'draw_shape' && (
+        <div className="absolute bottom-20 sm:bottom-16 left-3 right-3 z-20 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-md text-xs text-slate-800 dark:text-slate-200 max-w-full overflow-x-auto">
+            <select
+              value={drawShapeType}
+              onChange={(e) => setDrawShapeType(e.target.value as NodeShape)}
+              title="Shape Geometry"
+              className="px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-medium focus:outline-none focus:border-blue-500"
+            >
+              {DRAWABLE_SHAPES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+
+            <div className="inline-flex rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setDrawShapeFilled(true)}
+                className={`px-2 py-1 font-medium transition-colors ${
+                  drawShapeFilled
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Filled
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawShapeFilled(false)}
+                className={`px-2 py-1 font-medium transition-colors ${
+                  !drawShapeFilled
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-white dark:bg-slate-950 text-slate-600 dark:text-slate-300 hover:bg-slate-50'
+                }`}
+              >
+                Unfilled
+              </button>
+            </div>
+
+            {drawShapeFilled && (
+              <div className="flex items-center gap-1 pl-1 border-l border-slate-200 dark:border-slate-700">
+                <span className="text-[11px] text-slate-400">Fill</span>
+                {SHAPE_SWATCHES.slice(0, 6).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setDrawShapeFillColor(c)}
+                    className={`w-4 h-4 rounded border ${
+                      drawShapeFillColor.toLowerCase() === c.toLowerCase()
+                        ? 'border-blue-600 ring-2 ring-blue-500/40'
+                        : 'border-slate-300 dark:border-slate-600'
+                    }`}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+                <input
+                  type="color"
+                  value={drawShapeFillColor}
+                  onChange={(e) => setDrawShapeFillColor(e.target.value)}
+                  title="Custom Fill Color"
+                  className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer"
+                />
+              </div>
+            )}
+
+            <div className="flex items-center gap-1 pl-1 border-l border-slate-200 dark:border-slate-700">
+              <span className="text-[11px] text-slate-400">Stroke</span>
+              {BORDER_SWATCHES.slice(0, 5).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setDrawShapeBorderColor(c)}
+                  className={`w-4 h-4 rounded border ${
+                    drawShapeBorderColor.toLowerCase() === c.toLowerCase()
+                      ? 'border-blue-600 ring-2 ring-blue-500/40'
+                      : 'border-slate-300 dark:border-slate-600'
+                  }`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+              <input
+                type="color"
+                value={drawShapeBorderColor}
+                onChange={(e) => setDrawShapeBorderColor(e.target.value)}
+                title="Custom Border Color"
+                className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer"
+              />
+            </div>
+
+            <div className="flex items-center gap-1 pl-1 border-l border-slate-200 dark:border-slate-700">
+              {[1.5, 2, 4, 6].map((w) => (
+                <button
+                  key={w}
+                  type="button"
+                  onClick={() => setDrawShapeBorderWidth(w)}
+                  className={`px-1.5 py-0.5 rounded font-mono text-[11px] border ${
+                    drawShapeBorderWidth === w
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {w}px
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pen / Highlight Floating Config Bar */}
+      {(tool === 'pen' || tool === 'highlight') && (
+        <div className="absolute bottom-20 sm:bottom-16 left-3 right-3 z-20 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-md text-xs text-slate-800 dark:text-slate-200">
+            {tool === 'pen' ? (
+              <>
+                <span className="text-[11px] font-medium text-slate-400">Pen</span>
+                <div className="flex items-center gap-1">
+                  {PEN_SWATCHES.map((c) => {
+                    const activeCol = penColor || (theme === 'light' ? '#1e293b' : '#f8fafc');
+                    return (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setPenColor(c)}
+                        className={`w-4 h-4 rounded-full border ${
+                          activeCol.toLowerCase() === c.toLowerCase()
+                            ? 'border-blue-600 ring-2 ring-blue-500/40'
+                            : 'border-slate-300 dark:border-slate-600'
+                        }`}
+                        style={{ backgroundColor: c }}
+                      />
+                    );
+                  })}
+                  <input
+                    type="color"
+                    value={penColor || (theme === 'light' ? '#1e293b' : '#f8fafc')}
+                    onChange={(e) => setPenColor(e.target.value)}
+                    title="Custom Pen Color"
+                    className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer"
+                  />
+                </div>
+                <div className="flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+                  {[2, 3, 5, 8].map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setPenWidth(w)}
+                      className={`px-1.5 py-0.5 rounded font-mono text-[11px] border ${
+                        penWidth === w
+                          ? 'bg-blue-600 border-blue-600 text-white'
+                          : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {w}px
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <span className="text-[11px] font-medium text-slate-400">Highlight</span>
+                <div className="flex items-center gap-1.5">
+                  {['#facc15', '#4ade80', '#60a5fa', '#f472b6', '#fb923c'].map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setHighlightColor(c)}
+                      className={`w-4 h-4 rounded-full border ${
+                        highlightColor.toLowerCase() === c.toLowerCase()
+                          ? 'border-blue-600 ring-2 ring-blue-500/40'
+                          : 'border-slate-300 dark:border-slate-600'
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={highlightColor}
+                    onChange={(e) => setHighlightColor(e.target.value)}
+                    title="Custom Highlight Color"
+                    className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Diagram Studio Modal (Custom & Template Diagrams) */}
+      {showDiagramStudio && (
+        <DiagramStudioModal
+          uid={uid}
+          theme={theme}
+          currentCanvasGraph={graph}
+          onImportToCanvas={handleImportDiagram}
+          onNotify={onNotify}
+          onClose={() => setShowDiagramStudio(false)}
+        />
       )}
 
       {/* Bottom Mode & Zoom Toolbar */}
@@ -2154,9 +3421,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             [
               { id: 'select', icon: MousePointer2, label: 'Select', title: 'Select (V)' },
               { id: 'add_node', icon: PlusSquare, label: 'Add Node', title: 'Add Node (N)' },
-              { id: 'connect', icon: Spline, label: 'Connect', title: 'Connect (C)' },
+              { id: 'draw_shape', icon: Shapes, label: 'Shape', title: 'Draw Shape Filled/Unfilled (D)' },
+              { id: 'connect', icon: Spline, label: 'Connect', title: 'Connect Nodes & Stickies (C)' },
               { id: 'sticky', icon: StickyIcon, label: 'Sticky', title: 'Sticky Note (S)' },
-              { id: 'pen', icon: Pen, label: 'Pen', title: 'Pen (P)' },
+              { id: 'pen', icon: Pen, label: 'Pen', title: 'Pen Over Elements (P)' },
               { id: 'highlight', icon: Highlighter, label: 'Highlight', title: 'Highlighter (H)' },
               { id: 'eraser', icon: Eraser, label: 'Eraser', title: 'Ink Eraser (X)' },
               {
@@ -2202,6 +3470,20 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           })}
 
           <div className="w-px h-5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+
+          <button
+            type="button"
+            onClick={() => setShowDiagramStudio((v) => !v)}
+            title="Diagram Studio — Create Custom & Template Diagrams"
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+              showDiagramStudio
+                ? 'bg-indigo-600 text-white'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Atom className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Diagram Studio</span>
+          </button>
 
           <button
             onClick={() => setMultiMode((m) => !m)}
@@ -2305,328 +3587,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   );
 };
 
-// --- Canvas Drawing Primitives ---
-
-function drawRoundedRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  const rad = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + rad, y);
-  ctx.lineTo(x + w - rad, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + rad);
-  ctx.lineTo(x + w, y + h - rad);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - rad, y + h);
-  ctx.lineTo(x + rad, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - rad);
-  ctx.lineTo(x, y + rad);
-  ctx.quadraticCurveTo(x, y, x + rad, y);
-  ctx.closePath();
-}
-
-function drawArrowhead(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  angle: number,
-  size: number,
-  color: string
-) {
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(-size, -size * 0.48);
-  ctx.lineTo(-size * 0.78, 0);
-  ctx.lineTo(-size, size * 0.48);
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.restore();
-}
-
-function samplePointAlongPolyline(pts: { x: number; y: number }[], t: number) {
-  if (pts.length === 0) return { x: 0, y: 0 };
-  if (pts.length === 1) return pts[0];
-  let total = 0;
-  const segLens: number[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
-    segLens.push(l);
-    total += l;
-  }
-  if (total === 0) return pts[0];
-  let target = t * total;
-  for (let i = 0; i < segLens.length; i++) {
-    if (target <= segLens[i] || i === segLens.length - 1) {
-      const frac = segLens[i] > 0 ? target / segLens[i] : 0;
-      return {
-        x: pts[i].x + (pts[i + 1].x - pts[i].x) * frac,
-        y: pts[i].y + (pts[i + 1].y - pts[i].y) * frac,
-      };
-    }
-    target -= segLens[i];
-  }
-  return pts[pts.length - 1];
-}
-
-function drawNodeShape(
-  ctx: CanvasRenderingContext2D,
-  node: GraphNode,
-  fill: string,
-  border: string
-) {
-  const { x, y, w, h, shape } = node;
-  const hw = w / 2;
-  const hh = h / 2;
-  ctx.fillStyle = fill;
-  ctx.strokeStyle = border;
-  ctx.lineWidth = 1.6;
-
-  switch (shape) {
-    case 'text':
-      return;
-    case 'rectangle':
-    case 'table':
-      ctx.beginPath();
-      ctx.rect(x - hw, y - hh, w, h);
-      ctx.fill();
-      ctx.stroke();
-      return;
-    case 'square': {
-      const side = Math.min(w, h);
-      drawRoundedRect(ctx, x - side / 2, y - side / 2, side, side, 6);
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'circle':
-      ctx.beginPath();
-      ctx.ellipse(x, y, hw, hh, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      return;
-    case 'diamond':
-      ctx.beginPath();
-      ctx.moveTo(x, y - hh);
-      ctx.lineTo(x + hw, y);
-      ctx.lineTo(x, y + hh);
-      ctx.lineTo(x - hw, y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    case 'triangle':
-      ctx.beginPath();
-      ctx.moveTo(x, y - hh);
-      ctx.lineTo(x + hw, y + hh);
-      ctx.lineTo(x - hw, y + hh);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    case 'hexagon': {
-      const inset = Math.min(hw * 0.28, 22);
-      ctx.beginPath();
-      ctx.moveTo(x - hw + inset, y - hh);
-      ctx.lineTo(x + hw - inset, y - hh);
-      ctx.lineTo(x + hw, y);
-      ctx.lineTo(x + hw - inset, y + hh);
-      ctx.lineTo(x - hw + inset, y + hh);
-      ctx.lineTo(x - hw, y);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'parallelogram': {
-      const skew = Math.min(hw * 0.25, 20);
-      ctx.beginPath();
-      ctx.moveTo(x - hw + skew, y - hh);
-      ctx.lineTo(x + hw, y - hh);
-      ctx.lineTo(x + hw - skew, y + hh);
-      ctx.lineTo(x - hw, y + hh);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'star': {
-      const pts = getStarPolygon(x, y, hw, hh);
-      ctx.beginPath();
-      pts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'cylinder': {
-      const cap = Math.min(14, hh * 0.28);
-      ctx.beginPath();
-      ctx.moveTo(x - hw, y - hh + cap);
-      ctx.lineTo(x - hw, y + hh - cap);
-      ctx.ellipse(x, y + hh - cap, hw, cap, 0, Math.PI, 0, true);
-      ctx.lineTo(x + hw, y - hh + cap);
-      ctx.ellipse(x, y - hh + cap, hw, cap, 0, 0, Math.PI, true);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.ellipse(x, y - hh + cap, hw, cap, 0, 0, Math.PI * 2);
-      ctx.stroke();
-      return;
-    }
-    case 'cloud': {
-      ctx.beginPath();
-      ctx.moveTo(x - hw * 0.55, y + hh * 0.65);
-      ctx.bezierCurveTo(x - hw * 1.05, y + hh * 0.65, x - hw * 1.0, y - hh * 0.3, x - hw * 0.55, y - hh * 0.35);
-      ctx.bezierCurveTo(x - hw * 0.45, y - hh * 1.0, x + hw * 0.35, y - hh * 1.0, x + hw * 0.48, y - hh * 0.38);
-      ctx.bezierCurveTo(x + hw * 1.0, y - hh * 0.35, x + hw * 1.05, y + hh * 0.65, x + hw * 0.52, y + hh * 0.65);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'callout': {
-      const bodyBottom = y + hh * 0.58;
-      ctx.beginPath();
-      ctx.moveTo(x - hw + 10, y - hh);
-      ctx.lineTo(x + hw - 10, y - hh);
-      ctx.quadraticCurveTo(x + hw, y - hh, x + hw, y - hh + 10);
-      ctx.lineTo(x + hw, bodyBottom - 10);
-      ctx.quadraticCurveTo(x + hw, bodyBottom, x + hw - 10, bodyBottom);
-      ctx.lineTo(x - hw * 0.2, bodyBottom);
-      ctx.lineTo(x - hw * 0.48, y + hh);
-      ctx.lineTo(x - hw * 0.45, bodyBottom);
-      ctx.lineTo(x - hw + 10, bodyBottom);
-      ctx.quadraticCurveTo(x - hw, bodyBottom, x - hw, bodyBottom - 10);
-      ctx.lineTo(x - hw, y - hh + 10);
-      ctx.quadraticCurveTo(x - hw, y - hh, x - hw + 10, y - hh);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      return;
-    }
-    case 'progress_bar':
-    case 'rounded':
-    default:
-      drawRoundedRect(ctx, x - hw, y - hh, w, h, 12);
-      ctx.fill();
-      ctx.stroke();
-  }
-}
-
-function drawNodeLabelAndIcon(
-  ctx: CanvasRenderingContext2D,
-  node: GraphNode,
-  theme: ThemeMode
-) {
-  const safe = getShapeSafeTextBox(node);
-  const icon = node.icon?.trim() || '';
-  const pos = node.iconPosition ?? 'inline';
-  const textColor =
-    theme === 'high_contrast'
-      ? '#ffffff'
-      : node.shape === 'text'
-      ? theme === 'dark'
-        ? '#f8fafc'
-        : '#0f172a'
-      : node.textColor || getContrastTextColor(node.color);
-
-  const label = icon && pos === 'inline' ? `${icon} ${node.text}` : node.text;
-  let availW = safe.maxW;
-  let availH = safe.maxH - (node.progress !== null && node.progress !== undefined ? 10 : 0);
-  let textCenterX = node.x;
-  let textCenterY = node.y + safe.offsetY - (node.progress !== null && node.progress !== undefined ? 4 : 0);
-
-  if (icon && pos === 'top') {
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(icon, node.x, node.y - node.h * 0.22 + safe.offsetY);
-    availH = Math.max(18, availH * 0.62);
-    textCenterY += node.h * 0.14;
-  } else if (icon && pos === 'left') {
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(icon, node.x - safe.maxW * 0.36, textCenterY);
-    availW = Math.max(32, availW * 0.72);
-    textCenterX += safe.maxW * 0.12;
-  }
-
-  const layout = computeFittedTextLayout(ctx, label, availW, Math.max(14, availH), node.fs ?? 13);
-  ctx.font = `600 ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
-  ctx.fillStyle = textColor;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  const startY = textCenterY - ((layout.lines.length - 1) * layout.lineHeight) / 2;
-  layout.lines.forEach((line, i) => {
-    ctx.fillText(line, textCenterX, startY + i * layout.lineHeight);
-  });
-}
-
-function drawTableContent(ctx: CanvasRenderingContext2D, node: GraphNode, theme: ThemeMode) {
-  const table = node.tableData;
-  if (!table) return;
-  const x0 = node.x - node.w / 2;
-  const y0 = node.y - node.h / 2;
-  const cols = Math.max(1, table.headers.length);
-  const totalRows = 2 + table.rows.length; // title + header + data rows
-  const rowH = node.h / totalRows;
-  const colW = node.w / cols;
-
-  // Title bar
-  ctx.fillStyle = theme === 'high_contrast' ? '#18181b' : '#1e293b';
-  ctx.fillRect(x0 + 1, y0 + 1, node.w - 2, rowH);
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '600 11px "Plus Jakarta Sans", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(node.text || 'Data Table', node.x, y0 + rowH / 2, node.w - 12);
-
-  // Header row
-  ctx.fillStyle = theme === 'high_contrast' ? '#27272a' : '#e2e8f0';
-  ctx.fillRect(x0 + 1, y0 + rowH, node.w - 2, rowH);
-  ctx.fillStyle = theme === 'high_contrast' ? '#ffffff' : '#0f172a';
-  ctx.font = '600 10px "Plus Jakarta Sans", sans-serif';
-  table.headers.forEach((h, ci) => {
-    ctx.fillText(h, x0 + ci * colW + colW / 2, y0 + rowH * 1.5, colW - 8);
-  });
-
-  // Data rows
-  ctx.font = '400 10px "JetBrains Mono", monospace';
-  table.rows.forEach((row, ri) => {
-    const ry = y0 + (ri + 2) * rowH;
-    ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(x0, ry);
-    ctx.lineTo(x0 + node.w, ry);
-    ctx.stroke();
-
-    ctx.fillStyle = theme === 'high_contrast' ? '#ffffff' : '#1e293b';
-    for (let ci = 0; ci < cols; ci++) {
-      ctx.fillText(row[ci] ?? '', x0 + ci * colW + colW / 2, ry + rowH / 2, colW - 8);
-    }
-  });
-
-  // Vertical column dividers
-  ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
-  ctx.lineWidth = 0.8;
-  for (let ci = 1; ci < cols; ci++) {
-    ctx.beginPath();
-    ctx.moveTo(x0 + ci * colW, y0 + rowH);
-    ctx.lineTo(x0 + ci * colW, y0 + node.h);
-    ctx.stroke();
-  }
-}
+// --- Minimap & Eraser Helpers ---
 
 function drawMinimap(
   canvas: HTMLCanvasElement,
@@ -2657,6 +3618,12 @@ function drawMinimap(
     maxX = Math.max(maxX, n.x + n.w / 2 + 60);
     maxY = Math.max(maxY, n.y + n.h / 2 + 60);
   }
+  for (const st of graph.stickies) {
+    minX = Math.min(minX, st.x - st.w / 2 - 60);
+    minY = Math.min(minY, st.y - st.h / 2 - 60);
+    maxX = Math.max(maxX, st.x + st.w / 2 + 60);
+    maxY = Math.max(maxY, st.y + st.h / 2 + 60);
+  }
   const gw = Math.max(400, maxX - minX);
   const gh = Math.max(300, maxY - minY);
   const s = Math.min((mw - 12) / gw, (mh - 12) / gh);
@@ -2665,7 +3632,7 @@ function drawMinimap(
 
   onBounds({ minX: offX, minY: offY, scale: s, w: mw, h: mh });
 
-  const nodeMap = new Map(graph.nodes.map((n) => [n.id, n]));
+  const nodeMap = buildEntityMap(graph.nodes, graph.stickies);
   ctx.strokeStyle = theme === 'light' ? 'rgba(100,116,139,0.5)' : 'rgba(148,163,184,0.45)';
   ctx.lineWidth = 1;
   for (const e of graph.edges) {
@@ -2679,12 +3646,27 @@ function drawMinimap(
   }
 
   for (const n of graph.nodes) {
-    ctx.fillStyle = n.color || '#93c5fd';
+    const rx = (n.x - n.w / 2 - offX) * s;
+    const ry = (n.y - n.h / 2 - offY) * s;
+    const rw = Math.max(4, n.w * s);
+    const rh = Math.max(3, n.h * s);
+    if (n.filled === false) {
+      ctx.strokeStyle = n.borderColor || '#2563eb';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx, ry, rw, rh);
+    } else {
+      ctx.fillStyle = n.color || '#93c5fd';
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+  }
+
+  for (const st of graph.stickies) {
+    ctx.fillStyle = st.color || '#fef08a';
     ctx.fillRect(
-      (n.x - n.w / 2 - offX) * s,
-      (n.y - n.h / 2 - offY) * s,
-      Math.max(4, n.w * s),
-      Math.max(3, n.h * s)
+      (st.x - st.w / 2 - offX) * s,
+      (st.y - st.h / 2 - offY) * s,
+      Math.max(4, st.w * s),
+      Math.max(3, st.h * s)
     );
   }
 

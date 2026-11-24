@@ -476,6 +476,9 @@ function LinkDrawApp() {
       for (const n of prev.nodes) {
         prevNodePageMap.set(n.id, resolveElementPageId(n.pageId, prevPages));
       }
+      for (const s of prev.stickies) {
+        prevNodePageMap.set(s.id, resolveElementPageId(s.pageId, prevPages));
+      }
 
       const otherNodes = prev.nodes.filter(
         (n) => resolveElementPageId(n.pageId, prevPages) !== pageId
@@ -483,7 +486,7 @@ function LinkDrawApp() {
       const otherEdges = prev.edges.filter((e) => {
         const pid = e.pageId
           ? resolveElementPageId(e.pageId, prevPages)
-          : prevNodePageMap.get(e.a) ?? resolveElementPageId(undefined, prevPages);
+          : prevNodePageMap.get(e.a) ?? prevNodePageMap.get(e.b) ?? resolveElementPageId(undefined, prevPages);
         return pid !== pageId;
       });
       const otherStickies = prev.stickies.filter(
@@ -614,6 +617,18 @@ function LinkDrawApp() {
         nodeIdMap.set(n.id, nextId);
         return { ...cloneGraph({ ...sourceGraph, nodes: [n], edges: [], stickies: [], strokes: [] }).nodes[0], id: nextId, pageId: newPageId, createdAt: now, updatedAt: now };
       });
+      const clonedStickies = sourceGraph.stickies.map((s) => {
+        const nextId = makeSafeId('s');
+        nodeIdMap.set(s.id, nextId);
+        return {
+          ...s,
+          id: nextId,
+          pageId: newPageId,
+          tags: s.tags ? [...s.tags] : undefined,
+          createdAt: now,
+          updatedAt: now,
+        };
+      });
       const clonedEdges = sourceGraph.edges
         .filter((e) => nodeIdMap.has(e.a) && nodeIdMap.has(e.b))
         .map((e) => ({
@@ -625,13 +640,6 @@ function LinkDrawApp() {
           createdAt: now,
           updatedAt: now,
         }));
-      const clonedStickies = sourceGraph.stickies.map((s) => ({
-        ...s,
-        id: makeSafeId('s'),
-        pageId: newPageId,
-        createdAt: now,
-        updatedAt: now,
-      }));
       const clonedStrokes = sourceGraph.strokes.map((st) => ({
         ...st,
         id: makeSafeId('st'),
@@ -698,6 +706,9 @@ function LinkDrawApp() {
       for (const n of curr.nodes) {
         prevNodePageMap.set(n.id, resolveElementPageId(n.pageId, currPages));
       }
+      for (const s of curr.stickies) {
+        prevNodePageMap.set(s.id, resolveElementPageId(s.pageId, currPages));
+      }
 
       const nextNodes = curr.nodes.filter(
         (n) => resolveElementPageId(n.pageId, currPages) !== pageId
@@ -705,7 +716,7 @@ function LinkDrawApp() {
       const nextEdges = curr.edges.filter((e) => {
         const pid = e.pageId
           ? resolveElementPageId(e.pageId, currPages)
-          : prevNodePageMap.get(e.a) ?? resolveElementPageId(undefined, currPages);
+          : prevNodePageMap.get(e.a) ?? prevNodePageMap.get(e.b) ?? resolveElementPageId(undefined, currPages);
         return pid !== pageId;
       });
       const nextStickies = curr.stickies.filter(
@@ -746,21 +757,29 @@ function LinkDrawApp() {
       const nextNodes = curr.nodes.map((n) =>
         selectedNodeSet.has(n.id) ? { ...n, pageId: stamp, updatedAt: Date.now() } : n
       );
-      const nodePageAfter = new Map<string, string>();
+      const nextStickies = curr.stickies.map((s) =>
+        s.id === selectedStickyId ? { ...s, pageId: stamp, updatedAt: Date.now() } : s
+      );
+      const entityPageAfter = new Map<string, string>();
       for (const n of nextNodes) {
-        nodePageAfter.set(n.id, resolveElementPageId(n.pageId, currPages));
+        entityPageAfter.set(n.id, resolveElementPageId(n.pageId, currPages));
+      }
+      for (const s of nextStickies) {
+        entityPageAfter.set(s.id, resolveElementPageId(s.pageId, currPages));
       }
       const nextEdges = curr.edges.map((e) => {
         const bothMovedOnTarget =
-          nodePageAfter.get(e.a) === targetPageId && nodePageAfter.get(e.b) === targetPageId;
-        if (e.id === selectedEdgeId || (bothMovedOnTarget && (selectedNodeSet.has(e.a) || selectedNodeSet.has(e.b)))) {
+          entityPageAfter.get(e.a) === targetPageId && entityPageAfter.get(e.b) === targetPageId;
+        const touchesSelection =
+          selectedNodeSet.has(e.a) ||
+          selectedNodeSet.has(e.b) ||
+          e.a === selectedStickyId ||
+          e.b === selectedStickyId;
+        if (e.id === selectedEdgeId || (bothMovedOnTarget && touchesSelection)) {
           return { ...e, pageId: stamp, updatedAt: Date.now() };
         }
         return e;
       });
-      const nextStickies = curr.stickies.map((s) =>
-        s.id === selectedStickyId ? { ...s, pageId: stamp, updatedAt: Date.now() } : s
-      );
 
       clearCanvasSelection();
       setActivePageId(targetPageId);
@@ -924,12 +943,22 @@ function LinkDrawApp() {
         setSelectedEdgeId(null);
         setSelectedStickyId(null);
         setFocusRequest({ x: node.x, y: node.y, ts: Date.now() });
+        return;
+      }
+      const sticky = graph.stickies.find((s) => s.id === targetId);
+      if (sticky) {
+        const targetPage = resolveElementPageId(sticky.pageId, pages);
+        if (targetPage !== effectivePageId) setActivePageId(targetPage);
+        setSelectedNodeIds([]);
+        setSelectedEdgeId(null);
+        setSelectedStickyId(sticky.id);
+        setFocusRequest({ x: sticky.x, y: sticky.y, ts: Date.now() });
       }
     } else {
       const edge = graph.edges.find((e) => e.id === targetId);
       if (edge) {
-        const a = graph.nodes.find((n) => n.id === edge.a);
-        const b = graph.nodes.find((n) => n.id === edge.b);
+        const a = graph.nodes.find((n) => n.id === edge.a) ?? graph.stickies.find((s) => s.id === edge.a);
+        const b = graph.nodes.find((n) => n.id === edge.b) ?? graph.stickies.find((s) => s.id === edge.b);
         const targetPage = resolveElementPageId(edge.pageId ?? a?.pageId, pages);
         if (targetPage !== effectivePageId) setActivePageId(targetPage);
         setSelectedNodeIds([]);
@@ -1155,6 +1184,7 @@ function LinkDrawApp() {
             board={activeBoard}
             uid={user.uid}
             graph={activePageGraph}
+            fullGraph={graph}
             pages={pages}
             activePageId={effectivePageId}
             pageNodeCounts={pageNodeCounts}
@@ -1189,6 +1219,7 @@ function LinkDrawApp() {
             onInspectSticky={(s) => setInspectedSticky(s)}
             onOpenComments={() => setShowCommentsDrawer(true)}
             onOpenCollaborators={() => setShowCollaboratorsModal(true)}
+            onNotify={notify}
           />
         )}
 
@@ -1208,6 +1239,7 @@ function LinkDrawApp() {
           <NotesStudio
             uid={user.uid}
             boardId={activeBoardId}
+            boardTitle={activeBoard?.title}
             nodes={graph.nodes}
             notes={notes}
             initialSelectedNodeId={notesTargetNodeId}
@@ -1273,6 +1305,7 @@ function LinkDrawApp() {
             activeSubTab={utilitySubTab}
             onSubTabChange={setUtilitySubTab}
             boardTitle={activeBoard?.title ?? 'No Active Board'}
+            worksheetKey={`${activeBoardId ?? 'none'}::${effectivePageId}`}
             graph={activePageGraph}
             fullGraph={graph}
             theme={theme}
@@ -1414,7 +1447,11 @@ function LinkDrawApp() {
           }}
           onDelete={(id) => {
             commitPageGraph(
-              { ...activePageGraph, stickies: activePageGraph.stickies.filter((s) => s.id !== id) },
+              {
+                ...activePageGraph,
+                stickies: activePageGraph.stickies.filter((s) => s.id !== id),
+                edges: activePageGraph.edges.filter((e) => e.a !== id && e.b !== id),
+              },
               true
             );
             setSelectedStickyId(null);

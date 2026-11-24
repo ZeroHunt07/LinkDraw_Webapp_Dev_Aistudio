@@ -28,6 +28,7 @@ import { makeSafeId } from '../lib/firestoreSync';
 interface NotesStudioProps {
   uid: string;
   boardId: string | null;
+  boardTitle?: string;
   nodes: GraphNode[];
   notes: NoteRecord[];
   initialSelectedNodeId: string | null;
@@ -105,6 +106,7 @@ function notesDiffer(a: NoteRecord, b: NoteRecord): boolean {
 export const NotesStudio: React.FC<NotesStudioProps> = ({
   uid,
   boardId,
+  boardTitle,
   nodes,
   notes,
   initialSelectedNodeId,
@@ -120,6 +122,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
   const [isNewDraft, setIsNewDraft] = useState(false);
   const [tagsText, setTagsText] = useState('');
   const [newCheckText, setNewCheckText] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
   const [syncState, setSyncState] = useState<SyncState>('idle');
   const [saveError, setSaveError] = useState<string | null>(null);
 
@@ -247,6 +250,35 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
     };
   }, [clearAutoSaveTimer]);
 
+  // Workspace-scoped notes: show only notes belonging to the active workspace (or unassigned if none open)
+  const workspaceNotes = useMemo(() => {
+    if (boardId) {
+      return notes.filter((n) => n.boardId === boardId);
+    }
+    return notes.filter((n) => !n.boardId);
+  }, [notes, boardId]);
+
+  // Reset active editor/filter if workspace changes
+  const prevBoardIdRef = useRef<string | null>(boardId);
+  useEffect(() => {
+    if (prevBoardIdRef.current !== boardId) {
+      if (draftRef.current && dirtyRef.current) {
+        void flushPendingSave(true);
+      } else {
+        clearAutoSaveTimer();
+      }
+      prevBoardIdRef.current = boardId;
+      dirtyRef.current = false;
+      setSelectedNoteId(null);
+      setDraft(null);
+      setIsNewDraft(false);
+      setFolderFilter('__all__');
+      setCreatingFolder(false);
+      setSyncState('idle');
+      setSaveError(null);
+    }
+  }, [boardId, clearAutoSaveTimer, flushPendingSave]);
+
   const selectExistingNote = useCallback(
     (note: NoteRecord) => {
       if (draftRef.current && draftRef.current.id !== note.id && dirtyRef.current) {
@@ -263,6 +295,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       });
       setTagsText(note.tags.join(', '));
       setIsNewDraft(false);
+      setCreatingFolder(false);
       setSyncState('saved');
       setSaveError(null);
     },
@@ -303,6 +336,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       setDraft(blank);
       setTagsText(initialTags);
       setIsNewDraft(true);
+      setCreatingFolder(false);
       setSaveError(null);
       if (linkedNode) {
         // Persist node-linked note immediately so cross-navigation always preserves it
@@ -323,7 +357,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       return;
     }
     if (lastHandledNodeIdRef.current === initialSelectedNodeId) return;
-    const existing = notes.find((n) => n.linkedNodeId === initialSelectedNodeId);
+    const existing = workspaceNotes.find((n) => n.linkedNodeId === initialSelectedNodeId);
     if (existing) {
       lastHandledNodeIdRef.current = initialSelectedNodeId;
       selectExistingNote(existing);
@@ -334,12 +368,12 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
         startNewNote(targetNode);
       }
     }
-  }, [initialSelectedNodeId, nodes, notes, selectExistingNote, startNewNote]);
+  }, [initialSelectedNodeId, nodes, workspaceNotes, selectExistingNote, startNewNote]);
 
   // Two-way live sync: update open draft from Firestore when not locally dirty or saving
   useEffect(() => {
     if (!selectedNoteId) return;
-    const remote = notes.find((n) => n.id === selectedNoteId);
+    const remote = workspaceNotes.find((n) => n.id === selectedNoteId);
     if (!remote) {
       if (!isNewDraft && !dirtyRef.current && !inFlightRef.current) {
         setDraft(null);
@@ -360,19 +394,19 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
       setTagsText(remote.tags.join(', '));
       setSyncState('saved');
     }
-  }, [notes, selectedNoteId, isNewDraft]);
+  }, [workspaceNotes, selectedNoteId, isNewDraft]);
 
   const customFolders = useMemo(() => {
     const set = new Set<string>();
-    for (const n of notes) {
+    for (const n of workspaceNotes) {
       if (n.folder && n.folder.trim()) set.add(n.folder.trim());
     }
     return [...set].sort();
-  }, [notes]);
+  }, [workspaceNotes]);
 
   const filteredNotes = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return notes
+    return workspaceNotes
       .filter((n) => {
         if (folderFilter === '__archived__') {
           if (!n.archived) return false;
@@ -398,7 +432,7 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
         return b.updatedAt - a.updatedAt;
       });
-  }, [notes, folderFilter, search]);
+  }, [workspaceNotes, folderFilter, search]);
 
   const updateDraftAndAutoSave = (updater: (prev: NoteRecord) => NoteRecord, immediate = false) => {
     setDraft((prev) => {
@@ -469,11 +503,16 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
         } lg:h-full`}
       >
         <div className="p-4 border-b border-slate-200 dark:border-slate-800 space-y-3">
-          <div className="flex items-center justify-between">
-            <h1 className="text-base font-semibold">Notes Studio</h1>
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <h1 className="text-base font-semibold">Notes Studio</h1>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                {boardId ? `Workspace: ${boardTitle || 'Active Board'}` : 'General Notes (No workspace open)'}
+              </p>
+            </div>
             <button
               onClick={() => startNewNote()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 shrink-0"
             >
               <Plus className="w-3.5 h-3.5" />
               New Note
@@ -790,15 +829,61 @@ export const NotesStudio: React.FC<NotesStudioProps> = ({
 
               <div>
                 <label className="block text-slate-500 mb-1">Folder</label>
-                <input
-                  type="text"
-                  value={draft.folder}
-                  onChange={(e) =>
-                    updateDraftAndAutoSave((prev) => ({ ...prev, folder: e.target.value }))
-                  }
-                  placeholder="e.g. Security Ops"
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
-                />
+                {(() => {
+                  const trimmedFolder = draft.folder.trim();
+                  const hasExistingMatch = Boolean(trimmedFolder && customFolders.includes(trimmedFolder));
+                  const selectVal = creatingFolder
+                    ? '__new__'
+                    : hasExistingMatch
+                    ? trimmedFolder
+                    : trimmedFolder
+                    ? '__new__'
+                    : '';
+                  const showCreateInput = selectVal === '' || selectVal === '__new__';
+                  return (
+                    <div className="space-y-1.5">
+                      <select
+                        value={selectVal}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '__new__') {
+                            setCreatingFolder(true);
+                          } else if (val === '') {
+                            setCreatingFolder(false);
+                            updateDraftAndAutoSave((prev) => ({ ...prev, folder: '' }), true);
+                          } else {
+                            setCreatingFolder(false);
+                            updateDraftAndAutoSave((prev) => ({ ...prev, folder: val }), true);
+                          }
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                      >
+                        <option value="">No folder (select or type new)</option>
+                        {customFolders.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
+                        ))}
+                        <option value="__new__">+ Create new folder...</option>
+                      </select>
+                      {showCreateInput && (
+                        <input
+                          type="text"
+                          value={draft.folder}
+                          onFocus={() => setCreatingFolder(true)}
+                          onBlur={() => setCreatingFolder(false)}
+                          onChange={(e) => {
+                            setCreatingFolder(true);
+                            const nextVal = e.target.value;
+                            updateDraftAndAutoSave((prev) => ({ ...prev, folder: nextVal }));
+                          }}
+                          placeholder="Type new folder name..."
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900"
+                        />
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div>

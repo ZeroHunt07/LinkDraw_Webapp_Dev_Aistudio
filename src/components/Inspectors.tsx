@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FileText, Plus, Table, Trash2, X } from 'lucide-react';
 import type {
   ArrowType,
+  CanvasLayerName,
   EdgeRouting,
   GraphEdge,
   GraphNode,
@@ -100,11 +101,11 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
             />
           </div>
 
-          {/* Shape & Color */}
+          {/* Shape & Fill Mode */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                Shape (15 options)
+                Shape
               </label>
               <select
                 value={draft.shape}
@@ -113,10 +114,10 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
                   let nextTable = draft.tableData;
                   if (nextShape === 'table' && !nextTable) {
                     nextTable = {
-                      headers: ['Column A', 'Column B'],
+                      headers: ['Col 1', 'Col 2'],
                       rows: [
-                        ['Row 1A', 'Row 1B'],
-                        ['Row 2A', 'Row 2B'],
+                        ['', ''],
+                        ['', ''],
                       ],
                     };
                   }
@@ -134,22 +135,144 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
 
             <div>
               <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                Fill Color
+                Shape Fill Style
               </label>
-              <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                {NODE_SWATCHES.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setDraft({ ...draft, color: c })}
-                    style={{ backgroundColor: c }}
-                    className={`w-6 h-6 rounded-md border ${
-                      draft.color.toLowerCase() === c.toLowerCase()
-                        ? 'ring-2 ring-blue-600 border-white'
-                        : 'border-slate-300 dark:border-slate-700'
-                    }`}
+              <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setDraft({ ...draft, filled: true })}
+                  className={`py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    draft.filled !== false
+                      ? 'bg-white dark:bg-slate-900 shadow-xs text-slate-900 dark:text-slate-100'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  Filled
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDraft({
+                      ...draft,
+                      filled: false,
+                      borderColor: draft.borderColor || '#2563eb',
+                      borderWidth: draft.borderWidth ?? 2.4,
+                    })
+                  }
+                  className={`py-1.5 text-xs font-medium rounded-md transition-colors ${
+                    draft.filled === false
+                      ? 'bg-white dark:bg-slate-900 shadow-xs text-blue-600 dark:text-blue-400'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  Unfilled (Outline)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Colors & Border Styling */}
+          <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
+                  Fill Color {draft.filled === false && <span className="opacity-60">(inactive when unfilled)</span>}
+                </label>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {NODE_SWATCHES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, color: c, filled: true })}
+                      style={{ backgroundColor: c }}
+                      className={`w-6 h-6 rounded-md border ${
+                        draft.filled !== false && draft.color.toLowerCase() === c.toLowerCase()
+                          ? 'ring-2 ring-blue-600 border-white'
+                          : 'border-slate-300 dark:border-slate-700'
+                      }`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={/^#[0-9a-f]{6}$/i.test(draft.color) ? draft.color : '#dbeafe'}
+                    onChange={(e) => setDraft({ ...draft, color: e.target.value, filled: true })}
+                    title="Custom fill color"
+                    className="w-6 h-6 p-0 border border-slate-300 dark:border-slate-700 rounded-md cursor-pointer bg-transparent"
                   />
-                ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                    Border Color
+                  </label>
+                  {draft.borderColor && (
+                    <button
+                      type="button"
+                      onClick={() => setDraft({ ...draft, borderColor: undefined })}
+                      className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Auto
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {EDGE_SWATCHES.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, borderColor: c })}
+                      style={{ backgroundColor: c }}
+                      className={`w-6 h-6 rounded-md border ${
+                        (draft.borderColor ?? '').toLowerCase() === c.toLowerCase()
+                          ? 'ring-2 ring-blue-600 border-white'
+                          : 'border-slate-300 dark:border-slate-700'
+                      }`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    value={
+                      draft.borderColor && /^#[0-9a-f]{6}$/i.test(draft.borderColor)
+                        ? draft.borderColor
+                        : '#334155'
+                    }
+                    onChange={(e) => setDraft({ ...draft, borderColor: e.target.value })}
+                    title="Custom border color"
+                    className="w-6 h-6 p-0 border border-slate-300 dark:border-slate-700 rounded-md cursor-pointer bg-transparent"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+              <div>
+                <div className="flex justify-between text-xs text-slate-500 mb-1">
+                  <span>Border Width</span>
+                  <span className="font-mono tabular-nums">{(draft.borderWidth ?? 1.6).toFixed(1)}px</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={10}
+                  step={0.5}
+                  value={draft.borderWidth ?? 1.6}
+                  onChange={(e) => setDraft({ ...draft, borderWidth: Number(e.target.value) })}
+                  className="w-full accent-blue-600"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Canvas Layer</label>
+                <select
+                  value={draft.layer}
+                  onChange={(e) => setDraft({ ...draft, layer: e.target.value as CanvasLayerName })}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
+                >
+                  <option value="Background">Background</option>
+                  <option value="Data">Data</option>
+                  <option value="Annotations">Annotations</option>
+                </select>
               </div>
             </div>
           </div>
@@ -280,8 +403,8 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
                 </div>
                 <input
                   type="range"
-                  min={80}
-                  max={380}
+                  min={32}
+                  max={800}
                   value={draft.w}
                   onChange={(e) => setDraft({ ...draft, w: Number(e.target.value) })}
                   className="w-full accent-blue-600"
@@ -294,8 +417,8 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
                 </div>
                 <input
                   type="range"
-                  min={40}
-                  max={280}
+                  min={28}
+                  max={600}
                   value={draft.h}
                   onChange={(e) => setDraft({ ...draft, h: Number(e.target.value) })}
                   className="w-full accent-blue-600"
@@ -338,10 +461,10 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
                     w: Math.max(draft.w, 220),
                     h: Math.max(draft.h, 110),
                     tableData: {
-                      headers: ['Metric', 'Value'],
+                      headers: ['Col 1', 'Col 2'],
                       rows: [
-                        ['Latency', '24ms'],
-                        ['Status', 'Nominal'],
+                        ['', ''],
+                        ['', ''],
                       ],
                     },
                   });
@@ -884,7 +1007,18 @@ export const StickyInspectorModal: React.FC<StickyInspectorProps> = ({
   onDelete,
   onClose,
 }) => {
-  const [draft, setDraft] = useState<StickyNote>({ ...sticky });
+  const [draft, setDraft] = useState<StickyNote>({ ...sticky, tags: [...(sticky.tags ?? [])] });
+  const [tagsInput, setTagsInput] = useState((sticky.tags ?? []).join(', '));
+
+  const applyChanges = () => {
+    const parsedTags = tagsInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 20);
+    onUpdate({ ...draft, tags: parsedTags, updatedAt: Date.now() });
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -903,6 +1037,16 @@ export const StickyInspectorModal: React.FC<StickyInspectorProps> = ({
               rows={5}
               value={draft.text}
               onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-slate-500 mb-1">Tags (comma-separated)</label>
+            <input
+              type="text"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="todo, lead, follow-up"
               className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
             />
           </div>
@@ -948,10 +1092,7 @@ export const StickyInspectorModal: React.FC<StickyInspectorProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => {
-                onUpdate({ ...draft, updatedAt: Date.now() });
-                onClose();
-              }}
+              onClick={applyChanges}
               className="px-4 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700"
             >
               Apply
