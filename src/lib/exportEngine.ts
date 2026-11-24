@@ -1,5 +1,6 @@
 import type { GraphDocument, GraphEdge, GraphNode } from '../types/linkdraw';
 import { buildEntityMap, computeEdgeGeometry, computeParallelEdgeIndexMap } from './geometry';
+import { getIconDisplayText } from './nodeIcons';
 
 export function exportLinkDrawJSON(doc: GraphDocument, title: string): string {
   return JSON.stringify(
@@ -298,7 +299,8 @@ export function exportSVG(doc: GraphDocument): string {
           : `<rect x="${x}" y="${y}" width="${n.w}" height="${n.h}" rx="${
               n.shape === 'rectangle' || n.shape === 'table' ? 4 : 12
             }" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeW}" />`;
-      const label = (n.icon ? `${n.icon} ${n.text}` : n.text).trim();
+      const iconStr = getIconDisplayText(n.icon);
+      const label = (iconStr ? `${iconStr} ${n.text}` : n.text).trim();
       const textSvg = label
         ? `<text x="${n.x}" y="${n.y + 4}" font-family="sans-serif" font-size="12" font-weight="600" fill="#0f172a" text-anchor="middle">${escapeXml(
             label

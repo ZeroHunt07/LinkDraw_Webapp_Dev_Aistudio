@@ -10,6 +10,7 @@ import {
   RotateCcw,
   Save,
   Search,
+  Smile,
   Spline,
   StickyNote as StickyIcon,
   Trash2,
@@ -22,6 +23,7 @@ import type {
   GraphDocument,
   GraphEdge,
   GraphNode,
+  IconPosition,
   LineStyle,
   NodeShape,
   StickyNote,
@@ -45,6 +47,7 @@ import {
   type StemComponentPreset,
   type StemDiagramKit,
 } from '../lib/stemDiagrams';
+import { IconEmojiTray, NodeIconBadge } from './IconEmojiTray';
 import { makeSafeId } from '../lib/firestoreSync';
 
 export interface DiagramImportPayload {
@@ -254,6 +257,7 @@ export const DiagramStudioModal: React.FC<DiagramStudioModalProps> = ({
   onClose,
 }) => {
   const [activeTab, setActiveTab] = useState<StudioTab>('templates');
+  const [showBuilderIconTray, setShowBuilderIconTray] = useState(false);
 
   // Saved Custom Diagrams Library
   const [savedDiagrams, setSavedDiagrams] = useState<SavedCustomDiagram[]>(() =>
@@ -1729,6 +1733,47 @@ export const DiagramStudioModal: React.FC<DiagramStudioModalProps> = ({
                         }
                         className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950"
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] text-slate-500">Icon / Emoji</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowBuilderIconTray((v) => !v)}
+                          className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-medium"
+                        >
+                          <NodeIconBadge
+                            icon={selectedNode.icon}
+                            className="w-3.5 h-3.5"
+                            fallback={<Smile className="w-3.5 h-3.5 text-slate-400" />}
+                          />
+                          <span>{showBuilderIconTray ? 'Hide Tray' : 'Choose Icon'}</span>
+                        </button>
+                      </div>
+                      {showBuilderIconTray && (
+                        <div className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/60">
+                          <IconEmojiTray
+                            value={selectedNode.icon ?? ''}
+                            position={selectedNode.iconPosition ?? 'inline'}
+                            onChangeIcon={(nextIcon) =>
+                              setBuilderNodes((prev) =>
+                                prev.map((n) =>
+                                  n.id === selectedNode.id ? { ...n, icon: nextIcon } : n
+                                )
+                              )
+                            }
+                            onChangePosition={(nextPos: IconPosition) =>
+                              setBuilderNodes((prev) =>
+                                prev.map((n) =>
+                                  n.id === selectedNode.id ? { ...n, iconPosition: nextPos } : n
+                                )
+                              )
+                            }
+                            compact
+                          />
+                        </div>
+                      )}
                     </div>
 
                     <div>

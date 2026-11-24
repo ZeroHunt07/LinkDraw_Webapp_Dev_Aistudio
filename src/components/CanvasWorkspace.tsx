@@ -32,6 +32,7 @@ import {
   Search,
   Shapes,
   SlidersHorizontal,
+  Smile,
   Spline,
   StickyNote as StickyIcon,
   Trash2,
@@ -50,6 +51,7 @@ import type {
   GraphEdge,
   GraphNode,
   GraphPage,
+  IconPosition,
   NodeShape,
   StickyNote,
   ThemeMode,
@@ -79,6 +81,7 @@ import {
 import { filterGraphByPage, normalizePages } from '../lib/templates';
 import { exportBoardToPDF } from '../lib/pdfExport';
 import { DiagramStudioModal, type DiagramImportPayload } from './DiagramStudioModal';
+import { IconEmojiTray, NodeIconBadge } from './IconEmojiTray';
 import { makeSafeId } from '../lib/firestoreSync';
 
 interface CanvasWorkspaceProps {
@@ -239,6 +242,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const [pdfIncludeSummary, setPdfIncludeSummary] = useState(true);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [showDiagramStudio, setShowDiagramStudio] = useState(false);
+  const [showIconTray, setShowIconTray] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [searchTypeFilter, setSearchTypeFilter] = useState<'all' | 'nodes' | 'stickies'>('all');
@@ -592,6 +596,33 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return { x: 0, y: 0 };
     return toWorld(rect.width / 2, rect.height / 2);
+  };
+
+  const firstSelectedNode = useMemo(() => {
+    if (selectedNodeIds.length === 0) return null;
+    const firstId = selectedNodeIds[0];
+    return graph.nodes.find((n) => n.id === firstId) ?? null;
+  }, [graph.nodes, selectedNodeIds]);
+
+  const applyIconToSelectedNodes = (updates: { icon?: string; iconPosition?: IconPosition }) => {
+    if (selectedNodeIds.length === 0) return;
+    const selSet = new Set(selectedNodeIds);
+    const now = Date.now();
+    const next: GraphDocument = {
+      ...graph,
+      nodes: graph.nodes.map((n) =>
+        selSet.has(n.id) && !n.locked
+          ? {
+              ...n,
+              ...(updates.icon !== undefined ? { icon: updates.icon } : {}),
+              ...(updates.iconPosition !== undefined ? { iconPosition: updates.iconPosition } : {}),
+              updatedAt: now,
+            }
+          : n
+      ),
+    };
+    liveGraphRef.current = next;
+    onCommitGraph(next, true);
   };
 
   const handleImportDiagram = (payload: DiagramImportPayload) => {
@@ -3414,6 +3445,36 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         />
       )}
 
+      {/* Quick Floating Node Icon & Emoji Tray */}
+      {showIconTray && selectedNodeIds.length > 0 && firstSelectedNode && (
+        <div className="absolute bottom-20 sm:bottom-16 left-1/2 -translate-x-1/2 z-30 w-[330px] max-w-[calc(100vw-24px)] rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-xl p-3 text-slate-900 dark:text-slate-100">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold">
+              <Smile className="w-3.5 h-3.5 text-blue-600" />
+              <span>
+                Node Icon &amp; Emoji Tray
+                {selectedNodeIds.length > 1 ? ` (${selectedNodeIds.length})` : ''}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowIconTray(false)}
+              title="Close Icon Tray"
+              className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <IconEmojiTray
+            value={firstSelectedNode.icon ?? ''}
+            position={firstSelectedNode.iconPosition ?? 'inline'}
+            onChangeIcon={(nextIcon) => applyIconToSelectedNodes({ icon: nextIcon })}
+            onChangePosition={(nextPos) => applyIconToSelectedNodes({ iconPosition: nextPos })}
+            compact
+          />
+        </div>
+      )}
+
       {/* Bottom Mode & Zoom Toolbar */}
       <div className="absolute bottom-3 left-3 right-3 z-20 flex flex-col sm:flex-row sm:items-center justify-between gap-2 pointer-events-none">
         <div className="pointer-events-auto flex flex-nowrap items-center gap-1 p-1 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-xs overflow-x-auto max-w-full">
@@ -3499,6 +3560,25 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
           {hasSelection && (
             <>
+              {selectedNodeIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowIconTray((v) => !v)}
+                  title="Choose Icon or Emoji for Selected Node"
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                    showIconTray
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50'
+                  }`}
+                >
+                  <NodeIconBadge
+                    icon={firstSelectedNode?.icon}
+                    className="w-3.5 h-3.5"
+                    fallback={<Smile className="w-3.5 h-3.5" />}
+                  />
+                  <span>Icon</span>
+                </button>
+              )}
               <button
                 onClick={inspectActiveSelection}
                 title="Inspect Selected Element"

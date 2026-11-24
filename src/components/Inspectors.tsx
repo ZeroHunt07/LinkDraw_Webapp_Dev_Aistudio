@@ -6,13 +6,13 @@ import type {
   EdgeRouting,
   GraphEdge,
   GraphNode,
-  IconPosition,
   LineStyle,
   NodeShape,
   StickyNote,
   TableData,
 } from '../types/linkdraw';
 import { ALL_NODE_SHAPES } from '../lib/geometry';
+import { IconEmojiTray, NodeIconBadge } from './IconEmojiTray';
 
 const NODE_SWATCHES = [
   '#dbeafe',
@@ -28,7 +28,6 @@ const NODE_SWATCHES = [
 
 const EDGE_SWATCHES = ['#475569', '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed'];
 const STICKY_SWATCHES = ['#fef08a', '#bbf7d0', '#bfdbfe', '#fecaca', '#e9d5ff'];
-const QUICK_EMOJIS = ['🌐', '🔐', '⚙️', '🗄️', '📡', '🕸️', '✉️', '💳', '🧠', '⚠️', '✅', '🚀'];
 
 interface NodeInspectorProps {
   node: GraphNode;
@@ -277,57 +276,29 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
             </div>
           </div>
 
-          {/* Icon & Placement */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                Icon / Emoji
+          {/* Icon & Emoji Tray */}
+          <div className="p-3 rounded-lg border border-slate-200 dark:border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                Icon / Emoji Tray
               </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  maxLength={8}
-                  value={draft.icon ?? ''}
-                  onChange={(e) => setDraft({ ...draft, icon: e.target.value })}
-                  placeholder="e.g. 🌐"
-                  className="w-20 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-center"
-                />
-                <div className="flex flex-wrap gap-1">
-                  {QUICK_EMOJIS.slice(0, 6).map((em) => (
-                    <button
-                      type="button"
-                      key={em}
-                      onClick={() => setDraft({ ...draft, icon: em })}
-                      className="px-1.5 py-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 text-sm"
-                    >
-                      {em}
-                    </button>
-                  ))}
-                </div>
+              <div className="inline-flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+                <span className="text-[11px] text-slate-400">Selected:</span>
+                <span className="inline-flex items-center justify-center min-w-[24px] h-6 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950">
+                  <NodeIconBadge
+                    icon={draft.icon}
+                    className="w-3.5 h-3.5"
+                    fallback={<span className="text-[10px] text-slate-400">None</span>}
+                  />
+                </span>
               </div>
             </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-                Icon Placement
-              </label>
-              <div className="grid grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-lg">
-                {(['inline', 'top', 'left'] as IconPosition[]).map((pos) => (
-                  <button
-                    type="button"
-                    key={pos}
-                    onClick={() => setDraft({ ...draft, iconPosition: pos })}
-                    className={`py-1 text-xs font-medium rounded capitalize ${
-                      (draft.iconPosition ?? 'inline') === pos
-                        ? 'bg-white dark:bg-slate-900 shadow-xs'
-                        : 'text-slate-500'
-                    }`}
-                  >
-                    {pos}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <IconEmojiTray
+              value={draft.icon ?? ''}
+              position={draft.iconPosition ?? 'inline'}
+              onChangeIcon={(nextIcon) => setDraft({ ...draft, icon: nextIcon })}
+              onChangePosition={(nextPos) => setDraft({ ...draft, iconPosition: nextPos })}
+            />
           </div>
 
           {/* Tags */}

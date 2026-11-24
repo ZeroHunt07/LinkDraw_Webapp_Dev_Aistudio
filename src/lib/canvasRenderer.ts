@@ -16,6 +16,7 @@ import {
   getStarPolygon,
   wrapTextLines,
 } from './geometry';
+import { drawVectorNodeIcon, isVectorNodeIcon } from './nodeIcons';
 
 export function drawRoundedRect(
   ctx: CanvasRenderingContext2D,
@@ -829,7 +830,9 @@ export function drawNodeLabelAndIcon(
       ? node.textColor || (theme === 'dark' ? '#f8fafc' : '#0f172a')
       : node.textColor || getContrastTextColor(node.color);
 
-  const label = icon && pos === 'inline' ? (hasText ? `${icon} ${node.text}` : icon) : node.text;
+  const vectorIcon = isVectorNodeIcon(icon);
+  const label =
+    icon && pos === 'inline' && !vectorIcon ? (hasText ? `${icon} ${node.text}` : icon) : node.text;
   let availW = safe.maxW;
   let availH = safe.maxH - (node.progress !== null && node.progress !== undefined ? 10 : 0);
   let textCenterX = node.x;
@@ -837,21 +840,59 @@ export function drawNodeLabelAndIcon(
     node.y + safe.offsetY - (node.progress !== null && node.progress !== undefined ? 4 : 0);
 
   if (icon && pos === 'top') {
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(icon, node.x, node.y - node.h * 0.22 + safe.offsetY);
+    if (vectorIcon) {
+      drawVectorNodeIcon(ctx, icon, node.x, node.y - node.h * 0.22 + safe.offsetY, 17, textColor);
+    } else {
+      ctx.font = '18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, node.x, node.y - node.h * 0.22 + safe.offsetY);
+    }
     availH = Math.max(18, availH * 0.62);
     textCenterY += node.h * 0.14;
   } else if (icon && pos === 'left') {
-    ctx.font = '18px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(icon, node.x - safe.maxW * 0.36, textCenterY);
+    if (vectorIcon) {
+      drawVectorNodeIcon(ctx, icon, node.x - safe.maxW * 0.36, textCenterY, 16, textColor);
+    } else {
+      ctx.font = '18px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(icon, node.x - safe.maxW * 0.36, textCenterY);
+    }
     availW = Math.max(32, availW * 0.72);
     textCenterX += safe.maxW * 0.12;
+  } else if (vectorIcon && pos === 'inline') {
+    if (!hasText) {
+      drawVectorNodeIcon(ctx, icon, textCenterX, textCenterY, 18, textColor);
+      return;
+    }
+    const inlineIconSize = Math.max(13, Math.min(18, (node.fs ?? 13) + 2));
+    const layout = computeFittedTextLayout(
+      ctx,
+      node.text,
+      Math.max(24, availW - inlineIconSize - 6),
+      Math.max(14, availH),
+      node.fs ?? 13
+    );
+    ctx.font = `600 ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
+    const maxLineW = layout.lines.reduce((m, l) => Math.max(m, ctx.measureText(l).width), 0);
+    const gap = 5;
+    const totalW = inlineIconSize + gap + maxLineW;
+    const iconCx = textCenterX - totalW / 2 + inlineIconSize / 2;
+    const shiftTextX = iconCx + inlineIconSize / 2 + gap + maxLineW / 2;
+
+    drawVectorNodeIcon(ctx, icon, iconCx, textCenterY, inlineIconSize, textColor);
+    ctx.fillStyle = textColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const startY = textCenterY - ((layout.lines.length - 1) * layout.lineHeight) / 2;
+    layout.lines.forEach((line, i) => {
+      ctx.fillText(line, shiftTextX, startY + i * layout.lineHeight);
+    });
+    return;
   }
 
+  if (!hasText && !icon) return;
   const layout = computeFittedTextLayout(
     ctx,
     label,
