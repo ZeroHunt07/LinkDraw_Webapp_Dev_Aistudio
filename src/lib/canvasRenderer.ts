@@ -227,6 +227,44 @@ export function drawNodeShape(
       ctx.stroke();
       return;
     }
+    case 'block_arrow': {
+      const headLen = Math.min(hw * 0.72, h * 0.65);
+      const shaftHh = hh * 0.44;
+      const neckX = x + hw - headLen;
+      ctx.beginPath();
+      ctx.moveTo(x - hw, y - shaftHh);
+      ctx.lineTo(neckX, y - shaftHh);
+      ctx.lineTo(neckX, y - hh);
+      ctx.lineTo(x + hw, y);
+      ctx.lineTo(neckX, y + hh);
+      ctx.lineTo(neckX, y + shaftHh);
+      ctx.lineTo(x - hw, y + shaftHh);
+      ctx.closePath();
+      if (isFilled) ctx.fill();
+      ctx.stroke();
+      return;
+    }
+    case 'double_arrow': {
+      const headLen = Math.min(hw * 0.46, h * 0.58);
+      const shaftHh = hh * 0.42;
+      const leftNeckX = x - hw + headLen;
+      const rightNeckX = x + hw - headLen;
+      ctx.beginPath();
+      ctx.moveTo(x - hw, y);
+      ctx.lineTo(leftNeckX, y - hh);
+      ctx.lineTo(leftNeckX, y - shaftHh);
+      ctx.lineTo(rightNeckX, y - shaftHh);
+      ctx.lineTo(rightNeckX, y - hh);
+      ctx.lineTo(x + hw, y);
+      ctx.lineTo(rightNeckX, y + hh);
+      ctx.lineTo(rightNeckX, y + shaftHh);
+      ctx.lineTo(leftNeckX, y + shaftHh);
+      ctx.lineTo(leftNeckX, y + hh);
+      ctx.closePath();
+      if (isFilled) ctx.fill();
+      ctx.stroke();
+      return;
+    }
 
     // --- Electronic & Schematic Shapes ---
     case 'resistor': {

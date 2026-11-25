@@ -10,6 +10,8 @@ export type NodeShape =
   | 'cylinder'
   | 'cloud'
   | 'callout'
+  | 'block_arrow'
+  | 'double_arrow'
   | 'parallelogram'
   | 'table'
   | 'progress_bar'
@@ -120,6 +122,7 @@ export type ThemeMode = 'light' | 'dark' | 'high_contrast';
 export type ToolMode =
   | 'select'
   | 'add_node'
+  | 'add_text'
   | 'draw_shape'
   | 'connect'
   | 'sticky'

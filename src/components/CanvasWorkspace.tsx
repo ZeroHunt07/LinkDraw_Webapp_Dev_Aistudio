@@ -36,6 +36,7 @@ import {
   Spline,
   StickyNote as StickyIcon,
   Trash2,
+  Type,
   Undo2,
   Unlock,
   Users,
@@ -156,6 +157,9 @@ const DRAWABLE_SHAPES: { value: NodeShape; label: string }[] = [
   { value: 'star', label: 'Star' },
   { value: 'parallelogram', label: 'Para' },
   { value: 'callout', label: 'Callout' },
+  { value: 'block_arrow', label: 'Arrow' },
+  { value: 'double_arrow', label: 'Double Arrow' },
+  { value: 'vector_arrow', label: 'Line Arrow' },
   { value: 'cylinder', label: 'Cylinder' },
   { value: 'cloud', label: 'Cloud' },
   { value: 'resistor', label: 'Resistor' },
@@ -203,7 +207,6 @@ const DRAWABLE_SHAPES: { value: NodeShape; label: string }[] = [
   { value: 'unit_circle', label: 'Unit Circle' },
   { value: 'ellipse_conic', label: 'Conic Ellipse' },
   { value: 'right_triangle', label: 'Right Triangle' },
-  { value: 'vector_arrow', label: 'Vector' },
   { value: 'angle_arc', label: 'Angle Arc' },
   { value: 'venn_2', label: 'Venn 2-Set' },
   { value: 'venn_3', label: 'Venn 3-Set' },
@@ -336,6 +339,23 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const [penColor, setPenColor] = useState<string>('');
   const [penWidth, setPenWidth] = useState<number>(3);
   const [highlightColor, setHighlightColor] = useState<string>('#facc15');
+
+  // Direct Canvas Text tool config & inline editor
+  const [textToolSize, setTextToolSize] = useState<number>(16);
+  const [textToolColor, setTextToolColor] = useState<string>('');
+  const [inlineTextEdit, setInlineTextEdit] = useState<{
+    mode: 'create' | 'edit';
+    nodeId?: string;
+    wx: number;
+    wy: number;
+    text: string;
+    fs: number;
+    textColor: string;
+  } | null>(null);
+  const inlineTextRef = useRef<HTMLTextAreaElement | null>(null);
+  const inlineTextEditRef = useRef(inlineTextEdit);
+  inlineTextEditRef.current = inlineTextEdit;
+  const inlineCancelFlagRef = useRef(false);
 
   const [connectSourceId, setConnectSourceId] = useState<string | null>(null);
   const [zoomPct, setZoomPct] = useState(100);
@@ -495,6 +515,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         const k = e.key.toLowerCase();
         if (k === 'v') setTool('select');
         else if (k === 'n') setTool('add_node');
+        else if (k === 't') setTool('add_text');
         else if (k === 'd') setTool('draw_shape');
         else if (k === 'c' || k === 'e') setTool('connect');
         else if (k === 's') setTool('sticky');
@@ -602,6 +623,114 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     if (!gridSnap || gridSize <= 1) return v;
     return Math.round(v / gridSize) * gridSize;
   };
+
+  const measureCanvasTextBounds = useCallback((text: string, fs: number) => {
+    const lines = (text || 'Text').split('\n');
+    const ctx = canvasRef.current?.getContext('2d');
+    let maxW = 48;
+    if (ctx) {
+      ctx.save();
+      ctx.font = `600 ${fs}px "Plus Jakarta Sans", sans-serif`;
+      for (const ln of lines) {
+        maxW = Math.max(maxW, ctx.measureText(ln || ' ').width);
+      }
+      ctx.restore();
+    } else {
+      for (const ln of lines) {
+        maxW = Math.max(maxW, ln.length * fs * 0.6);
+      }
+    }
+    const w = Math.max(64, Math.ceil(maxW + 22));
+    const h = Math.max(Math.ceil(fs * 1.6), Math.ceil(lines.length * fs * 1.26 + 14));
+    return { w, h };
+  }, []);
+
+  const commitInlineText = useCallback(() => {
+    const current = inlineTextEditRef.current;
+    if (!current) return;
+    if (inlineCancelFlagRef.current) {
+      inlineCancelFlagRef.current = false;
+      setInlineTextEdit(null);
+      return;
+    }
+    const trimmed = current.text.trimEnd();
+    if (!trimmed.trim()) {
+      setInlineTextEdit(null);
+      return;
+    }
+
+    const g = liveGraphRef.current;
+    const now = Date.now();
+    const { w, h } = measureCanvasTextBounds(trimmed, current.fs);
+
+    if (current.mode === 'edit' && current.nodeId) {
+      const next: GraphDocument = {
+        ...g,
+        nodes: g.nodes.map((n) =>
+          n.id === current.nodeId
+            ? {
+                ...n,
+                text: trimmed,
+                fs: current.fs,
+                textColor: current.textColor || undefined,
+                w,
+                h,
+                updatedAt: now,
+              }
+            : n
+        ),
+      };
+      liveGraphRef.current = next;
+      onCommitGraph(next, true);
+      onSelectionChange([current.nodeId], null, null);
+    } else {
+      const newNode: GraphNode = {
+        id: makeSafeId('n'),
+        x: snapCoord(current.wx + w / 2 - 4),
+        y: snapCoord(current.wy),
+        w,
+        h,
+        text: trimmed,
+        shape: 'text',
+        color: '#ffffff',
+        filled: false,
+        textColor: current.textColor || undefined,
+        fs: current.fs,
+        icon: '',
+        iconPosition: 'inline',
+        tags: [],
+        metadata: {},
+        layer: 'Data',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const next: GraphDocument = {
+        ...g,
+        nodes: [...g.nodes, newNode],
+      };
+      liveGraphRef.current = next;
+      onSelectionChange([newNode.id], null, null);
+      onCommitGraph(next, true);
+      setTool('select');
+    }
+    setInlineTextEdit(null);
+  }, [measureCanvasTextBounds, onCommitGraph, onSelectionChange]);
+
+  const inlineEditKey = inlineTextEdit
+    ? `${inlineTextEdit.mode}:${inlineTextEdit.nodeId ?? ''}:${inlineTextEdit.wx}:${inlineTextEdit.wy}`
+    : '';
+  useEffect(() => {
+    if (!inlineEditKey) return;
+    const raf = requestAnimationFrame(() => {
+      const el = inlineTextRef.current;
+      if (!el) return;
+      el.focus();
+      if (inlineTextEditRef.current?.mode === 'edit') {
+        el.select();
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [inlineEditKey]);
 
   // Alignment & Layer Operations
   const alignSelected = (op: 'left' | 'centerH' | 'top' | 'distH' | 'distV') => {
@@ -1042,8 +1171,29 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.setPointerCapture(e.pointerId);
+    if (inlineTextEditRef.current) {
+      commitInlineText();
+      return;
+    }
+
     const { sx, sy } = getCanvasCoords(e);
+
+    if (tool === 'add_text' && e.button !== 1 && !spaceDownRef.current) {
+      e.preventDefault();
+      const { x: textWx, y: textWy } = toWorld(sx, sy);
+      inlineCancelFlagRef.current = false;
+      setInlineTextEdit({
+        mode: 'create',
+        wx: textWx,
+        wy: textWy,
+        text: '',
+        fs: textToolSize,
+        textColor: textToolColor,
+      });
+      return;
+    }
+
+    canvas.setPointerCapture(e.pointerId);
     activePointersRef.current.set(e.pointerId, { x: sx, y: sy });
 
     // 2-finger pinch gesture immediately supersedes any single-pointer drag
@@ -1325,7 +1475,20 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       const now = Date.now();
       if (lastTapRef.current.id === hitNode.id && now - lastTapRef.current.time < 320) {
         lastTapRef.current = { time: 0, id: null };
-        onInspectNode(hitNode);
+        if (hitNode.shape === 'text') {
+          inlineCancelFlagRef.current = false;
+          setInlineTextEdit({
+            mode: 'edit',
+            nodeId: hitNode.id,
+            wx: hitNode.x,
+            wy: hitNode.y,
+            text: hitNode.text,
+            fs: hitNode.fs ?? 16,
+            textColor: hitNode.textColor ?? '',
+          });
+        } else {
+          onInspectNode(hitNode);
+        }
         return;
       }
       lastTapRef.current = { time: now, id: hitNode.id };
@@ -1666,8 +1829,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       const cfg = drawShapeConfigRef.current;
       const isCompactSquare =
         cfg.shape === 'circle' || cfg.shape === 'square' || cfg.shape === 'diamond' || cfg.shape === 'star';
+      const isArrowBlock = cfg.shape === 'block_arrow' || cfg.shape === 'double_arrow' || cfg.shape === 'vector_arrow';
       const w = isClick ? (isCompactSquare ? 100 : 156) : Math.max(32, Math.round(rawW));
-      const h = isClick ? (isCompactSquare ? 100 : 88) : Math.max(28, Math.round(rawH));
+      const h = isClick ? (isCompactSquare ? 100 : isArrowBlock ? 64 : 88) : Math.max(28, Math.round(rawH));
       const cx = isClick ? gest.startWx : (gest.startWx + gest.currWx) / 2;
       const cy = isClick ? gest.startWy : (gest.startWy + gest.currWy) / 2;
       const now = Date.now();
@@ -2062,6 +2226,12 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
           for (const node of orderedNodes) {
             if (hiddenNodes.has(node.id) || layerVisible.get(node.layer) === false) continue;
+            if (
+              inlineTextEditRef.current?.mode === 'edit' &&
+              inlineTextEditRef.current.nodeId === node.id
+            ) {
+              continue;
+            }
             if (
               node.x + node.w / 2 < viewMinX ||
               node.x - node.w / 2 > viewMaxX ||
@@ -2748,9 +2918,85 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             pointerWorldRef.current = null;
           }}
         className={`w-full h-full block touch-none ${
-          tool === 'select' ? 'cursor-default' : 'cursor-crosshair'
+          tool === 'select'
+            ? 'cursor-default'
+            : tool === 'add_text'
+            ? 'cursor-text'
+            : 'cursor-crosshair'
         }`}
       />
+
+      {/* Direct On-Canvas Inline Text Editor */}
+      {inlineTextEdit && (() => {
+        const cam = cameraRef.current;
+        const scale = cam.scale;
+        const scaledFs = Math.max(10, Math.round(inlineTextEdit.fs * scale));
+        const bounds = measureCanvasTextBounds(inlineTextEdit.text || 'Text', inlineTextEdit.fs);
+        const screenX = inlineTextEdit.wx * scale + cam.ox;
+        const screenY = inlineTextEdit.wy * scale + cam.oy;
+        const boxW = Math.max(120, Math.ceil(bounds.w * scale));
+        const boxH = Math.max(Math.ceil(scaledFs * 1.75), Math.ceil(bounds.h * scale));
+        const resolvedTextColor =
+          inlineTextEdit.textColor || (theme === 'light' ? '#0f172a' : '#f8fafc');
+        const isEdit = inlineTextEdit.mode === 'edit';
+
+        return (
+          <div
+            style={{
+              left: `${screenX}px`,
+              top: `${screenY}px`,
+              transform: isEdit ? 'translate(-50%, -50%)' : 'translate(0, -50%)',
+            }}
+            className="absolute z-30 flex flex-col items-start gap-1"
+          >
+            <textarea
+              ref={inlineTextRef}
+              value={inlineTextEdit.text}
+              placeholder="Type text..."
+              onChange={(e) =>
+                setInlineTextEdit((prev) => (prev ? { ...prev, text: e.target.value } : null))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  inlineCancelFlagRef.current = true;
+                  setInlineTextEdit(null);
+                } else if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  commitInlineText();
+                }
+              }}
+              onBlur={() => commitInlineText()}
+              style={{
+                width: `${boxW}px`,
+                height: `${boxH}px`,
+                fontSize: `${scaledFs}px`,
+                lineHeight: 1.24,
+                fontWeight: 600,
+                fontFamily: '"Plus Jakarta Sans", sans-serif',
+                color: resolvedTextColor,
+                textAlign: isEdit ? 'center' : 'left',
+              }}
+              className="resize-none overflow-hidden rounded-lg border-2 border-dashed border-blue-500 bg-white/80 dark:bg-slate-900/80 backdrop-blur-[2px] px-2 py-1 shadow-sm focus:outline-none placeholder:text-slate-400"
+            />
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 text-white text-[10px] whitespace-nowrap shadow-xs">
+              <span>Enter save · Shift+Enter line · Esc cancel</span>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  commitInlineText();
+                }}
+                className="px-1.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 font-semibold"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Top Floating Workspace Bar */}
       <div className="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
@@ -3504,6 +3750,70 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         </div>
       )}
 
+      {/* Direct Text Tool Floating Config Bar */}
+      {tool === 'add_text' && (
+        <div className="absolute bottom-20 sm:bottom-16 left-3 right-3 z-20 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-md text-xs text-slate-800 dark:text-slate-200">
+            <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">Text Size</span>
+            <div className="flex items-center gap-1">
+              {[12, 16, 20, 26, 32].map((sz) => (
+                <button
+                  key={sz}
+                  type="button"
+                  onClick={() => setTextToolSize(sz)}
+                  className={`px-1.5 py-0.5 rounded font-mono text-[11px] border whitespace-nowrap shrink-0 ${
+                    textToolSize === sz
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {sz}px
+                </button>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+              <span className="text-[11px] font-medium text-slate-400">Color</span>
+              <button
+                type="button"
+                onClick={() => setTextToolColor('')}
+                className={`px-1.5 py-0.5 rounded text-[11px] border whitespace-nowrap shrink-0 ${
+                  !textToolColor
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                }`}
+              >
+                Auto
+              </button>
+              {['#0f172a', '#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed', '#f8fafc'].map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setTextToolColor(c)}
+                  className={`w-4 h-4 rounded-full border shrink-0 ${
+                    textToolColor.toLowerCase() === c.toLowerCase()
+                      ? 'border-blue-600 ring-2 ring-blue-500/40'
+                      : 'border-slate-300 dark:border-slate-600'
+                  }`}
+                  style={{ backgroundColor: c }}
+                />
+              ))}
+              <input
+                type="color"
+                value={textToolColor || (theme === 'light' ? '#0f172a' : '#f8fafc')}
+                onChange={(e) => setTextToolColor(e.target.value)}
+                title="Custom Text Color"
+                className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer shrink-0"
+              />
+            </div>
+
+            <span className="text-[11px] text-slate-400 pl-1.5 border-l border-slate-200 dark:border-slate-700 whitespace-nowrap">
+              Click anywhere on canvas to type
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Diagram Studio Modal (Custom & Template Diagrams) */}
       {showDiagramStudio && (
         <DiagramStudioModal
@@ -3553,6 +3863,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             [
               { id: 'select', icon: MousePointer2, label: 'Select', title: 'Select (V)' },
               { id: 'add_node', icon: PlusSquare, label: 'Add Node', title: 'Add Node (N)' },
+              { id: 'add_text', icon: Type, label: 'Text', title: 'Add Text Directly on Canvas (T)' },
               { id: 'draw_shape', icon: Shapes, label: 'Shape', title: 'Draw Shape Filled/Unfilled (D)' },
               { id: 'connect', icon: Spline, label: 'Connect', title: 'Connect Nodes & Stickies (C)' },
               { id: 'sticky', icon: StickyIcon, label: 'Sticky', title: 'Sticky Note (S)' },

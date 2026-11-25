@@ -60,8 +60,14 @@ export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: numb
       return { maxW: Math.max(24, node.w * 0.68), maxH: Math.max(18, node.h * 0.76), offsetY: 0 };
     case 'star':
       return { maxW: Math.max(24, node.w * 0.44), maxH: Math.max(18, node.h * 0.44), offsetY: node.h * 0.04 };
+    case 'text':
+      return { maxW: Math.max(24, node.w - 8), maxH: Math.max(18, node.h - 4), offsetY: 0 };
     case 'callout':
       return { maxW: padW, maxH: Math.max(18, node.h * 0.54), offsetY: -node.h * 0.16 };
+    case 'block_arrow':
+      return { maxW: Math.max(24, node.w * 0.56), maxH: Math.max(18, node.h * 0.42), offsetY: 0 };
+    case 'double_arrow':
+      return { maxW: Math.max(24, node.w * 0.5), maxH: Math.max(18, node.h * 0.42), offsetY: 0 };
     case 'cylinder':
       return { maxW: padW, maxH: Math.max(18, node.h * 0.66), offsetY: node.h * 0.08 };
     case 'parallelogram':
@@ -223,6 +229,40 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
     }
     case 'star': {
       const poly = getStarPolygon(cx, cy, hw, hh);
+      return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
+    }
+    case 'block_arrow': {
+      const headLen = Math.min(hw * 0.72, node.h * 0.65);
+      const shaftHh = hh * 0.44;
+      const neckX = cx + hw - headLen;
+      const poly: Point[] = [
+        { x: cx - hw, y: cy - shaftHh },
+        { x: neckX, y: cy - shaftHh },
+        { x: neckX, y: cy - hh },
+        { x: cx + hw, y: cy },
+        { x: neckX, y: cy + hh },
+        { x: neckX, y: cy + shaftHh },
+        { x: cx - hw, y: cy + shaftHh },
+      ];
+      return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
+    }
+    case 'double_arrow': {
+      const headLen = Math.min(hw * 0.46, node.h * 0.58);
+      const shaftHh = hh * 0.42;
+      const leftNeckX = cx - hw + headLen;
+      const rightNeckX = cx + hw - headLen;
+      const poly: Point[] = [
+        { x: cx - hw, y: cy },
+        { x: leftNeckX, y: cy - hh },
+        { x: leftNeckX, y: cy - shaftHh },
+        { x: rightNeckX, y: cy - shaftHh },
+        { x: rightNeckX, y: cy - hh },
+        { x: cx + hw, y: cy },
+        { x: rightNeckX, y: cy + hh },
+        { x: rightNeckX, y: cy + shaftHh },
+        { x: leftNeckX, y: cy + shaftHh },
+        { x: leftNeckX, y: cy + hh },
+      ];
       return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
     }
     default:
@@ -611,7 +651,7 @@ export function computeFittedTextLayout(
   const cached = textLayoutCache.get(key);
   if (cached) return cached;
 
-  let fs = Math.max(8, Math.min(22, baseFontSize));
+  let fs = Math.max(8, Math.min(36, baseFontSize));
   let bestLines: string[] = [text];
   let bestFs = fs;
 
@@ -715,6 +755,8 @@ export const ALL_NODE_SHAPES: { value: NodeShape; label: string }[] = [
   { value: 'cylinder', label: 'Cylinder' },
   { value: 'cloud', label: 'Cloud' },
   { value: 'callout', label: 'Callout' },
+  { value: 'block_arrow', label: 'Arrow (Block)' },
+  { value: 'double_arrow', label: 'Double Arrow' },
   { value: 'parallelogram', label: 'Parallelogram' },
   { value: 'table', label: 'Data Table' },
   { value: 'progress_bar', label: 'Progress Card' },
