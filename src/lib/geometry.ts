@@ -68,13 +68,30 @@ export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: numb
       return { maxW: Math.max(24, node.w * 0.68), maxH: padH, offsetY: 0 };
     case 'cloud':
       return { maxW: Math.max(24, node.w * 0.66), maxH: Math.max(18, node.h * 0.54), offsetY: 0 };
+    case 'prism':
+      return { maxW: Math.max(24, node.w * 0.52), maxH: Math.max(18, node.h * 0.44), offsetY: node.h * 0.16 };
+    case 'right_triangle':
     case 'incline':
       return { maxW: Math.max(24, node.w * 0.52), maxH: Math.max(18, node.h * 0.42), offsetY: node.h * 0.18 };
+    case 'pyramid_3d':
     case 'cone_3d':
       return { maxW: Math.max(24, node.w * 0.55), maxH: Math.max(18, node.h * 0.44), offsetY: node.h * 0.14 };
+    case 'sphere_3d':
+    case 'meter_circle':
+      return { maxW: Math.max(24, node.w * 0.72), maxH: Math.max(18, node.h * 0.72), offsetY: 0 };
     case 'axes_2d':
+    case 'axes_3d':
+    case 'parabola':
+    case 'sine_graph':
     case 'bell_curve':
-      return { maxW: padW, maxH: 24, offsetY: -node.h * 0.38 };
+    case 'venn_3':
+    case 'punnett_grid':
+    case 'energy_profile':
+    case 'scatter_plot':
+    case 'bar_chart':
+      return { maxW: padW, maxH: 24, offsetY: -node.h * 0.4 };
+    case 'opamp':
+      return { maxW: Math.max(24, node.w * 0.44), maxH: Math.max(18, node.h * 0.45), offsetY: 0 };
     case 'resistor':
     case 'capacitor':
     case 'inductor':
@@ -84,13 +101,69 @@ export function getShapeSafeTextBox(node: GraphNode): { maxW: number; maxH: numb
     case 'bulb':
     case 'switch_sym':
     case 'transistor':
+    case 'xor_gate':
+    case 'transformer':
+    case 'fuse_sym':
+    case 'potentiometer':
     case 'spring':
     case 'pulley':
     case 'lens':
+    case 'concave_lens':
+    case 'concave_mirror':
+    case 'convex_mirror':
+    case 'pendulum':
+    case 'solenoid':
+    case 'field_lines':
+    case 'lever_fulcrum':
+    case 'cart_wheels':
+    case 'thermometer':
+    case 'piston_cylinder':
+    case 'projectile_arc':
+    case 'ray_source':
     case 'wave':
+    case 'number_line':
+    case 'unit_circle':
+    case 'ellipse_conic':
     case 'vector_arrow':
     case 'angle_arc':
-      return { maxW: Math.max(40, node.w + 20), maxH: 24, offsetY: node.h * 0.44 };
+    case 'pie_chart':
+    case 'box_plot':
+    case 'fraction_bar':
+    case 'cell_animal':
+    case 'cell_plant':
+    case 'dna_helix':
+    case 'mitochondria':
+    case 'chloroplast':
+    case 'neuron':
+    case 'antibody':
+    case 'virus_capsid':
+    case 'leaf_organ':
+    case 'ribosome':
+    case 'golgi_body':
+    case 'lipid_bilayer':
+    case 'chromosome':
+    case 'petri_dish':
+    case 'microscope':
+    case 'heart_chamber':
+    case 'synapse_cleft':
+    case 'beaker':
+    case 'erlenmeyer_flask':
+    case 'round_flask':
+    case 'test_tube':
+    case 'burette':
+    case 'funnel_filter':
+    case 'graduated_cylinder':
+    case 'condenser_tube':
+    case 'bunsen_burner':
+    case 'benzene_ring':
+    case 'cyclohexane_chair':
+    case 'atom_bohr':
+    case 'reaction_arrow':
+    case 'bond_double':
+    case 'bond_triple':
+    case 'molecule_h2o':
+    case 'tetrahedral_mol':
+      return { maxW: Math.max(48, node.w + 24), maxH: 24, offsetY: node.h * 0.46 };
     default:
       return { maxW: padW, maxH: padH, offsetY: 0 };
   }
@@ -109,7 +182,13 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
   const uy = dy / len;
 
   switch (node.shape) {
-    case 'circle': {
+    case 'circle':
+    case 'meter_circle':
+    case 'sphere_3d':
+    case 'pie_chart':
+    case 'cell_animal':
+    case 'petri_dish':
+    case 'unit_circle': {
       const denom = Math.hypot(ux / Math.max(1, hw), uy / Math.max(1, hh)) || 1;
       return { x: cx + ux / denom, y: cy + uy / denom };
     }
@@ -117,7 +196,9 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
       const denom = (Math.abs(ux) / Math.max(1, hw) + Math.abs(uy) / Math.max(1, hh)) || 1;
       return { x: cx + ux / denom, y: cy + uy / denom };
     }
-    case 'triangle': {
+    case 'triangle':
+    case 'prism':
+    case 'pyramid_3d': {
       const poly: Point[] = [
         { x: cx, y: cy - hh },
         { x: cx + hw, y: cy + hh },
@@ -125,7 +206,10 @@ export function getShapeBoundaryPoint(node: GraphNode, fromX: number, fromY: num
       ];
       return intersectRayPolygon(cx, cy, ux, uy, poly) ?? rectIntersect(cx, cy, hw, hh, ux, uy);
     }
-    case 'hexagon': {
+    case 'hexagon':
+    case 'benzene_ring':
+    case 'cyclohexane_chair':
+    case 'cell_plant': {
       const inset = hw * 0.3;
       const poly: Point[] = [
         { x: cx - hw + inset, y: cy - hh },
@@ -427,7 +511,13 @@ export function hitTestNode(wx: number, wy: number, node: GraphNode): boolean {
   if (wx < node.x - hw || wx > node.x + hw || wy < node.y - hh || wy > node.y + hh) {
     return false;
   }
-  if (node.shape === 'circle') {
+  if (
+    node.shape === 'circle' ||
+    node.shape === 'meter_circle' ||
+    node.shape === 'sphere_3d' ||
+    node.shape === 'pie_chart' ||
+    node.shape === 'petri_dish'
+  ) {
     const nx = (wx - node.x) / hw;
     const ny = (wy - node.y) / hh;
     return nx * nx + ny * ny <= 1.05;
@@ -640,18 +730,89 @@ export const ALL_NODE_SHAPES: { value: NodeShape; label: string }[] = [
   { value: 'and_gate', label: 'AND Gate' },
   { value: 'or_gate', label: 'OR Gate' },
   { value: 'not_gate', label: 'NOT Gate (Inverter)' },
+  { value: 'xor_gate', label: 'XOR Gate (Logic)' },
+  { value: 'opamp', label: 'Op-Amp Amplifier' },
   { value: 'transistor', label: 'Transistor (BJT)' },
+  { value: 'transformer', label: 'AC Transformer' },
+  { value: 'fuse_sym', label: 'Fuse (Protection)' },
+  { value: 'potentiometer', label: 'Potentiometer (Var R)' },
   { value: 'spring', label: 'Helical Spring (Physics)' },
   { value: 'pulley', label: 'Pulley (Physics)' },
   { value: 'incline', label: 'Inclined Plane / Wedge' },
   { value: 'lens', label: 'Convex Lens (Optics)' },
+  { value: 'concave_lens', label: 'Concave Lens (Optics)' },
+  { value: 'prism', label: 'Optical Prism (Physics)' },
+  { value: 'concave_mirror', label: 'Concave Mirror (Optics)' },
+  { value: 'convex_mirror', label: 'Convex Mirror (Optics)' },
+  { value: 'ray_source', label: 'Laser / Ray Emitter' },
+  { value: 'pendulum', label: 'Simple Pendulum (Physics)' },
+  { value: 'magnet_bar', label: 'Bar Magnet N/S (Physics)' },
+  { value: 'meter_circle', label: 'Meter V/A/Ω (Physics)' },
+  { value: 'solenoid', label: 'Solenoid / Electromagnet' },
+  { value: 'field_lines', label: 'Electric / Magnetic Field' },
+  { value: 'lever_fulcrum', label: 'Lever & Fulcrum (Torque)' },
+  { value: 'cart_wheels', label: 'Dynamics Cart (Momentum)' },
+  { value: 'thermometer', label: 'Thermometer (Thermal)' },
+  { value: 'piston_cylinder', label: 'Gas Piston Cylinder' },
+  { value: 'projectile_arc', label: 'Projectile Trajectory' },
   { value: 'wave', label: 'Sine Wave (Physics)' },
   { value: 'axes_2d', label: '2D Coordinate Axes (Math)' },
+  { value: 'axes_3d', label: '3D Isometric Axes (Math)' },
+  { value: 'number_line', label: '1D Number Line (Math)' },
+  { value: 'parabola', label: 'Parabola Curve (Math)' },
+  { value: 'sine_graph', label: 'Sinusoidal Plot (Math)' },
+  { value: 'unit_circle', label: 'Unit Circle Trig (Math)' },
+  { value: 'ellipse_conic', label: 'Conic Ellipse & Foci' },
   { value: 'vector_arrow', label: 'Vector / Force Arrow' },
   { value: 'angle_arc', label: 'Angle Arc (Geometry)' },
+  { value: 'right_triangle', label: 'Right Triangle (Trig)' },
   { value: 'venn_2', label: '2-Set Venn Diagram' },
+  { value: 'venn_3', label: '3-Set Venn Diagram' },
   { value: 'bell_curve', label: 'Normal Bell Curve' },
+  { value: 'pie_chart', label: 'Pie / Sector Chart' },
+  { value: 'bar_chart', label: 'Bar Chart / Histogram' },
+  { value: 'scatter_plot', label: 'Scatter Plot & Fit' },
+  { value: 'box_plot', label: 'Box-and-Whisker Plot' },
+  { value: 'fraction_bar', label: 'Fraction / Ratio Bar' },
   { value: 'cube_3d', label: '3D Prism / Cube' },
+  { value: 'sphere_3d', label: '3D Sphere (Math)' },
   { value: 'cone_3d', label: '3D Cone' },
+  { value: 'pyramid_3d', label: '3D Pyramid (Math)' },
   { value: 'matrix_box', label: 'Bracketed Matrix' },
+  { value: 'cell_animal', label: 'Animal Cell (Biology)' },
+  { value: 'cell_plant', label: 'Plant Cell (Biology)' },
+  { value: 'dna_helix', label: 'DNA Double Helix (Biology)' },
+  { value: 'mitochondria', label: 'Mitochondrion (Biology)' },
+  { value: 'chloroplast', label: 'Chloroplast (Biology)' },
+  { value: 'ribosome', label: 'Ribosome & mRNA (Biology)' },
+  { value: 'golgi_body', label: 'Golgi Apparatus (Biology)' },
+  { value: 'lipid_bilayer', label: 'Lipid Bilayer Membrane' },
+  { value: 'chromosome', label: 'Chromosome X (Genetics)' },
+  { value: 'neuron', label: 'Neuron / Nerve Cell (Biology)' },
+  { value: 'synapse_cleft', label: 'Synaptic Cleft (Neuro)' },
+  { value: 'antibody', label: 'Antibody IgG (Biology)' },
+  { value: 'virus_capsid', label: 'Virus / Bacteriophage (Biology)' },
+  { value: 'petri_dish', label: 'Petri Culture Dish (Micro)' },
+  { value: 'microscope', label: 'Compound Microscope' },
+  { value: 'heart_chamber', label: '4-Chamber Heart (Anatomy)' },
+  { value: 'leaf_organ', label: 'Leaf Vascular Organ (Biology)' },
+  { value: 'punnett_grid', label: 'Punnett Square 2×2 (Biology)' },
+  { value: 'beaker', label: 'Lab Beaker (Chemistry)' },
+  { value: 'erlenmeyer_flask', label: 'Erlenmeyer Flask (Chemistry)' },
+  { value: 'round_flask', label: 'Round-Bottom Flask (Chemistry)' },
+  { value: 'test_tube', label: 'Test Tube (Chemistry)' },
+  { value: 'burette', label: 'Titration Burette (Chem)' },
+  { value: 'funnel_filter', label: 'Filter Funnel (Chemistry)' },
+  { value: 'graduated_cylinder', label: 'Graduated Cylinder (Chem)' },
+  { value: 'condenser_tube', label: 'Liebig Condenser (Chem)' },
+  { value: 'bunsen_burner', label: 'Bunsen Burner (Chemistry)' },
+  { value: 'benzene_ring', label: 'Benzene Aromatic Ring (Chem)' },
+  { value: 'cyclohexane_chair', label: 'Cyclohexane Chair (Org Chem)' },
+  { value: 'atom_bohr', label: 'Bohr Atom Model (Chemistry)' },
+  { value: 'reaction_arrow', label: 'Equilibrium Arrow ⇌ (Chem)' },
+  { value: 'bond_double', label: 'Double Covalent Bond (Chem)' },
+  { value: 'bond_triple', label: 'Triple Covalent Bond (Chem)' },
+  { value: 'molecule_h2o', label: 'Molecular Geometry (Chemistry)' },
+  { value: 'tetrahedral_mol', label: 'Tetrahedral sp³ Molecule' },
+  { value: 'energy_profile', label: 'Activation Energy Curve' },
 ];

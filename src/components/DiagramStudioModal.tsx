@@ -1242,6 +1242,8 @@ export const DiagramStudioModal: React.FC<DiagramStudioModalProps> = ({
                       { id: 'physics', label: 'Physics' },
                       { id: 'schematics', label: 'Schematics' },
                       { id: 'maths', label: 'Maths' },
+                      { id: 'biology', label: 'Biology' },
+                      { id: 'chemistry', label: 'Chemistry' },
                       { id: 'systems', label: 'Systems' },
                     ] as const
                   ).map((cat) => (
@@ -1478,6 +1480,8 @@ export const DiagramStudioModal: React.FC<DiagramStudioModalProps> = ({
                       { id: 'physics', label: 'Physics' },
                       { id: 'schematics', label: 'Schematics' },
                       { id: 'maths', label: 'Maths' },
+                      { id: 'biology', label: 'Biology' },
+                      { id: 'chemistry', label: 'Chemistry' },
                     ] as const
                   ).map((cat) => (
                     <button
@@ -1658,6 +1662,8 @@ export const DiagramStudioModal: React.FC<DiagramStudioModalProps> = ({
                     <option value="physics">Physics</option>
                     <option value="schematics">Schematics</option>
                     <option value="maths">Maths</option>
+                    <option value="biology">Biology</option>
+                    <option value="chemistry">Chemistry</option>
                   </select>
                   <button
                     type="button"
