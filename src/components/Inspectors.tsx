@@ -87,15 +87,72 @@ export const NodeInspectorModal: React.FC<NodeInspectorProps> = ({
         </div>
 
         <div className="overflow-y-auto p-5 space-y-4 text-sm">
-          {/* Label */}
-          <div>
-            <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-              Label
-            </label>
+          {/* Label & Text Styling */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <label className="block text-xs font-medium text-slate-500 dark:text-slate-400">
+                Label
+              </label>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setDraft({ ...draft, bold: !draft.bold })}
+                  title="Bold"
+                  className={`w-7 h-6 rounded border text-xs font-bold transition-colors ${
+                    draft.bold
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraft({ ...draft, italic: !draft.italic })}
+                  title="Italic"
+                  className={`w-7 h-6 rounded border text-xs italic font-serif transition-colors ${
+                    draft.italic
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDraft({ ...draft, underline: !draft.underline })}
+                  title="Underline"
+                  className={`w-7 h-6 rounded border text-xs underline transition-colors ${
+                    draft.underline
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  U
+                </button>
+                <select
+                  value={draft.fs ?? 13}
+                  onChange={(e) => setDraft({ ...draft, fs: Number(e.target.value) })}
+                  title="Font Size"
+                  className="h-6 px-1.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-xs font-mono"
+                >
+                  {[10, 12, 13, 14, 16, 18, 20, 24, 28, 32].map((sz) => (
+                    <option key={sz} value={sz}>
+                      {sz}px
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
             <textarea
               rows={2}
               value={draft.text}
               onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+              style={{
+                fontWeight: draft.bold ? 700 : 400,
+                fontStyle: draft.italic ? 'italic' : 'normal',
+                textDecoration: draft.underline ? 'underline' : 'none',
+              }}
               className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
             />
           </div>

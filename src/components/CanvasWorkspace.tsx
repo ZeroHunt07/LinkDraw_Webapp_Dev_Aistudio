@@ -4,6 +4,7 @@ import {
   AlignLeft,
   AlignStartVertical,
   Atom,
+  Bold,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -16,6 +17,7 @@ import {
   FileDown,
   FolderInput,
   Highlighter,
+  Italic,
   Layers,
   Lock,
   Map as MapIcon,
@@ -37,6 +39,7 @@ import {
   StickyNote as StickyIcon,
   Trash2,
   Type,
+  Underline,
   Undo2,
   Unlock,
   Users,
@@ -343,6 +346,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   // Direct Canvas Text tool config & inline editor
   const [textToolSize, setTextToolSize] = useState<number>(16);
   const [textToolColor, setTextToolColor] = useState<string>('');
+  const [textToolBold, setTextToolBold] = useState<boolean>(false);
+  const [textToolItalic, setTextToolItalic] = useState<boolean>(false);
+  const [textToolUnderline, setTextToolUnderline] = useState<boolean>(false);
   const [inlineTextEdit, setInlineTextEdit] = useState<{
     mode: 'create' | 'edit';
     nodeId?: string;
@@ -351,6 +357,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     text: string;
     fs: number;
     textColor: string;
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
   } | null>(null);
   const inlineTextRef = useRef<HTMLTextAreaElement | null>(null);
   const inlineTextEditRef = useRef(inlineTextEdit);
@@ -506,6 +515,15 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         setShowSearch(true);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && selectedNodeIds.length > 0) {
+        e.preventDefault();
+        applyTextStyleToSelectedNodes({ bold: !firstSelectedNode?.bold });
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i' && selectedNodeIds.length > 0) {
+        e.preventDefault();
+        applyTextStyleToSelectedNodes({ italic: !firstSelectedNode?.italic });
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u' && selectedNodeIds.length > 0) {
+        e.preventDefault();
+        applyTextStyleToSelectedNodes({ underline: !firstSelectedNode?.underline });
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         handleDeleteSelected();
       } else if (e.key === 'Escape') {
@@ -624,26 +642,31 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     return Math.round(v / gridSize) * gridSize;
   };
 
-  const measureCanvasTextBounds = useCallback((text: string, fs: number) => {
-    const lines = (text || 'Text').split('\n');
-    const ctx = canvasRef.current?.getContext('2d');
-    let maxW = 48;
-    if (ctx) {
-      ctx.save();
-      ctx.font = `600 ${fs}px "Plus Jakarta Sans", sans-serif`;
-      for (const ln of lines) {
-        maxW = Math.max(maxW, ctx.measureText(ln || ' ').width);
+  const measureCanvasTextBounds = useCallback(
+    (text: string, fs: number, bold = false, italic = false) => {
+      const lines = (text || 'Text').split('\n');
+      const ctx = canvasRef.current?.getContext('2d');
+      let maxW = 48;
+      const weight = bold ? '700' : '400';
+      const stylePrefix = italic ? 'italic ' : '';
+      if (ctx) {
+        ctx.save();
+        ctx.font = `${stylePrefix}${weight} ${fs}px "Plus Jakarta Sans", sans-serif`;
+        for (const ln of lines) {
+          maxW = Math.max(maxW, ctx.measureText(ln || ' ').width);
+        }
+        ctx.restore();
+      } else {
+        for (const ln of lines) {
+          maxW = Math.max(maxW, ln.length * fs * (bold ? 0.65 : 0.6));
+        }
       }
-      ctx.restore();
-    } else {
-      for (const ln of lines) {
-        maxW = Math.max(maxW, ln.length * fs * 0.6);
-      }
-    }
-    const w = Math.max(64, Math.ceil(maxW + 22));
-    const h = Math.max(Math.ceil(fs * 1.6), Math.ceil(lines.length * fs * 1.26 + 14));
-    return { w, h };
-  }, []);
+      const w = Math.max(64, Math.ceil(maxW + 22));
+      const h = Math.max(Math.ceil(fs * 1.6), Math.ceil(lines.length * fs * 1.26 + 14));
+      return { w, h };
+    },
+    []
+  );
 
   const commitInlineText = useCallback(() => {
     const current = inlineTextEditRef.current;
@@ -661,7 +684,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
     const g = liveGraphRef.current;
     const now = Date.now();
-    const { w, h } = measureCanvasTextBounds(trimmed, current.fs);
+    const { w, h } = measureCanvasTextBounds(trimmed, current.fs, current.bold, current.italic);
 
     if (current.mode === 'edit' && current.nodeId) {
       const next: GraphDocument = {
@@ -673,6 +696,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 text: trimmed,
                 fs: current.fs,
                 textColor: current.textColor || undefined,
+                bold: current.bold,
+                italic: current.italic,
+                underline: current.underline,
                 w,
                 h,
                 updatedAt: now,
@@ -696,6 +722,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         filled: false,
         textColor: current.textColor || undefined,
         fs: current.fs,
+        bold: current.bold,
+        italic: current.italic,
+        underline: current.underline,
         icon: '',
         iconPosition: 'inline',
         tags: [],
@@ -803,6 +832,52 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     const firstId = selectedNodeIds[0];
     return graph.nodes.find((n) => n.id === firstId) ?? null;
   }, [graph.nodes, selectedNodeIds]);
+
+  const applyTextStyleToSelectedNodes = useCallback(
+    (updates: {
+      bold?: boolean;
+      italic?: boolean;
+      underline?: boolean;
+      fs?: number;
+      textColor?: string;
+    }) => {
+      if (selectedNodeIds.length === 0) return;
+      const selSet = new Set(selectedNodeIds);
+      const now = Date.now();
+      const g = liveGraphRef.current;
+      const next: GraphDocument = {
+        ...g,
+        nodes: g.nodes.map((n) => {
+          if (!selSet.has(n.id) || n.locked) return n;
+          const nextBold = updates.bold !== undefined ? updates.bold : Boolean(n.bold);
+          const nextItalic = updates.italic !== undefined ? updates.italic : Boolean(n.italic);
+          const nextUnderline =
+            updates.underline !== undefined ? updates.underline : Boolean(n.underline);
+          const nextFs = updates.fs !== undefined ? updates.fs : (n.fs ?? 16);
+          const nextColor =
+            updates.textColor !== undefined ? updates.textColor || undefined : n.textColor;
+          const sizeUpdates =
+            n.shape === 'text'
+              ? measureCanvasTextBounds(n.text, nextFs, nextBold, nextItalic)
+              : { w: n.w, h: n.h };
+          return {
+            ...n,
+            bold: nextBold,
+            italic: nextItalic,
+            underline: nextUnderline,
+            fs: nextFs,
+            textColor: nextColor,
+            w: sizeUpdates.w,
+            h: sizeUpdates.h,
+            updatedAt: now,
+          };
+        }),
+      };
+      liveGraphRef.current = next;
+      onCommitGraph(next, true);
+    },
+    [measureCanvasTextBounds, onCommitGraph, selectedNodeIds]
+  );
 
   const applyIconToSelectedNodes = (updates: { icon?: string; iconPosition?: IconPosition }) => {
     if (selectedNodeIds.length === 0) return;
@@ -1189,6 +1264,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         text: '',
         fs: textToolSize,
         textColor: textToolColor,
+        bold: textToolBold,
+        italic: textToolItalic,
+        underline: textToolUnderline,
       });
       return;
     }
@@ -1485,6 +1563,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             text: hitNode.text,
             fs: hitNode.fs ?? 16,
             textColor: hitNode.textColor ?? '',
+            bold: Boolean(hitNode.bold),
+            italic: Boolean(hitNode.italic),
+            underline: Boolean(hitNode.underline),
           });
         } else {
           onInspectNode(hitNode);
@@ -2931,10 +3012,15 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         const cam = cameraRef.current;
         const scale = cam.scale;
         const scaledFs = Math.max(10, Math.round(inlineTextEdit.fs * scale));
-        const bounds = measureCanvasTextBounds(inlineTextEdit.text || 'Text', inlineTextEdit.fs);
+        const bounds = measureCanvasTextBounds(
+          inlineTextEdit.text || 'Text',
+          inlineTextEdit.fs,
+          inlineTextEdit.bold,
+          inlineTextEdit.italic
+        );
         const screenX = inlineTextEdit.wx * scale + cam.ox;
         const screenY = inlineTextEdit.wy * scale + cam.oy;
-        const boxW = Math.max(120, Math.ceil(bounds.w * scale));
+        const boxW = Math.max(140, Math.ceil(bounds.w * scale));
         const boxH = Math.max(Math.ceil(scaledFs * 1.75), Math.ceil(bounds.h * scale));
         const resolvedTextColor =
           inlineTextEdit.textColor || (theme === 'light' ? '#0f172a' : '#f8fafc');
@@ -2962,6 +3048,18 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   e.stopPropagation();
                   inlineCancelFlagRef.current = true;
                   setInlineTextEdit(null);
+                } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, bold: !prev.bold } : null));
+                } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, italic: !prev.italic } : null));
+                } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'u') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, underline: !prev.underline } : null));
                 } else if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   e.stopPropagation();
@@ -2974,22 +3072,64 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 height: `${boxH}px`,
                 fontSize: `${scaledFs}px`,
                 lineHeight: 1.24,
-                fontWeight: 600,
+                fontWeight: inlineTextEdit.bold ? 700 : 400,
+                fontStyle: inlineTextEdit.italic ? 'italic' : 'normal',
+                textDecoration: inlineTextEdit.underline ? 'underline' : 'none',
                 fontFamily: '"Plus Jakarta Sans", sans-serif',
                 color: resolvedTextColor,
                 textAlign: isEdit ? 'center' : 'left',
               }}
               className="resize-none overflow-hidden rounded-lg border-2 border-dashed border-blue-500 bg-white/80 dark:bg-slate-900/80 backdrop-blur-[2px] px-2 py-1 shadow-sm focus:outline-none placeholder:text-slate-400"
             />
-            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-900/90 text-white text-[10px] whitespace-nowrap shadow-xs">
-              <span>Enter save · Shift+Enter line · Esc cancel</span>
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900/95 text-white text-[10px] whitespace-nowrap shadow-xs">
+              <button
+                type="button"
+                title="Bold (Ctrl+B)"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, bold: !prev.bold } : null));
+                }}
+                className={`p-1 rounded transition-colors ${
+                  inlineTextEdit.bold ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Bold className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                title="Italic (Ctrl+I)"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, italic: !prev.italic } : null));
+                }}
+                className={`p-1 rounded transition-colors ${
+                  inlineTextEdit.italic ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Italic className="w-3 h-3" />
+              </button>
+              <button
+                type="button"
+                title="Underline (Ctrl+U)"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setInlineTextEdit((prev) => (prev ? { ...prev, underline: !prev.underline } : null));
+                }}
+                className={`p-1 rounded transition-colors ${
+                  inlineTextEdit.underline ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                <Underline className="w-3 h-3" />
+              </button>
+              <span className="w-px h-3 bg-slate-700 mx-0.5" />
+              <span className="text-slate-300">Enter save · Esc cancel</span>
               <button
                 type="button"
                 onMouseDown={(e) => {
                   e.preventDefault();
                   commitInlineText();
                 }}
-                className="px-1.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 font-semibold"
+                className="ml-0.5 px-1.5 py-0.5 rounded bg-blue-600 hover:bg-blue-500 font-semibold"
               >
                 Done
               </button>
@@ -3754,8 +3894,47 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
       {tool === 'add_text' && (
         <div className="absolute bottom-20 sm:bottom-16 left-3 right-3 z-20 flex justify-center pointer-events-none">
           <div className="pointer-events-auto flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-md text-xs text-slate-800 dark:text-slate-200">
-            <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">Text Size</span>
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setTextToolBold((v) => !v)}
+                title="Bold (Ctrl+B)"
+                className={`p-1 rounded border transition-colors shrink-0 ${
+                  textToolBold
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Bold className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextToolItalic((v) => !v)}
+                title="Italic (Ctrl+I)"
+                className={`p-1 rounded border transition-colors shrink-0 ${
+                  textToolItalic
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Italic className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setTextToolUnderline((v) => !v)}
+                title="Underline (Ctrl+U)"
+                className={`p-1 rounded border transition-colors shrink-0 ${
+                  textToolUnderline
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                }`}
+              >
+                <Underline className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+              <span className="text-[11px] font-medium text-slate-400 whitespace-nowrap">Size</span>
               {[12, 16, 20, 26, 32].map((sz) => (
                 <button
                   key={sz}
@@ -3813,6 +3992,136 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           </div>
         </div>
       )}
+
+      {/* Selected Text Object Quick Formatting Bar */}
+      {tool === 'select' &&
+        !inlineTextEdit &&
+        !showIconTray &&
+        firstSelectedNode &&
+        firstSelectedNode.shape === 'text' && (
+          <div className="absolute bottom-20 sm:bottom-16 left-3 right-3 z-20 flex justify-center pointer-events-none">
+            <div className="pointer-events-auto flex flex-wrap items-center gap-2 px-3 py-1.5 rounded-xl bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-800 shadow-md text-xs text-slate-800 dark:text-slate-200">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => applyTextStyleToSelectedNodes({ bold: !firstSelectedNode.bold })}
+                  title="Bold (Ctrl+B)"
+                  className={`p-1 rounded border transition-colors shrink-0 ${
+                    firstSelectedNode.bold
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Bold className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => applyTextStyleToSelectedNodes({ italic: !firstSelectedNode.italic })}
+                  title="Italic (Ctrl+I)"
+                  className={`p-1 rounded border transition-colors shrink-0 ${
+                    firstSelectedNode.italic
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Italic className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    applyTextStyleToSelectedNodes({ underline: !firstSelectedNode.underline })
+                  }
+                  title="Underline (Ctrl+U)"
+                  className={`p-1 rounded border transition-colors shrink-0 ${
+                    firstSelectedNode.underline
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                  }`}
+                >
+                  <Underline className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+                {[12, 16, 20, 26, 32].map((sz) => (
+                  <button
+                    key={sz}
+                    type="button"
+                    onClick={() => applyTextStyleToSelectedNodes({ fs: sz })}
+                    className={`px-1.5 py-0.5 rounded font-mono text-[11px] border whitespace-nowrap shrink-0 ${
+                      (firstSelectedNode.fs ?? 16) === sz
+                        ? 'bg-blue-600 border-blue-600 text-white'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                    }`}
+                  >
+                    {sz}px
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-1 pl-1.5 border-l border-slate-200 dark:border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => applyTextStyleToSelectedNodes({ textColor: '' })}
+                  className={`px-1.5 py-0.5 rounded text-[11px] border whitespace-nowrap shrink-0 ${
+                    !firstSelectedNode.textColor
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  Auto
+                </button>
+                {['#0f172a', '#2563eb', '#dc2626', '#059669', '#d97706', '#7c3aed', '#f8fafc'].map(
+                  (c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => applyTextStyleToSelectedNodes({ textColor: c })}
+                      className={`w-4 h-4 rounded-full border shrink-0 ${
+                        (firstSelectedNode.textColor ?? '').toLowerCase() === c.toLowerCase()
+                          ? 'border-blue-600 ring-2 ring-blue-500/40'
+                          : 'border-slate-300 dark:border-slate-600'
+                      }`}
+                      style={{ backgroundColor: c }}
+                    />
+                  )
+                )}
+                <input
+                  type="color"
+                  value={
+                    firstSelectedNode.textColor || (theme === 'light' ? '#0f172a' : '#f8fafc')
+                  }
+                  onChange={(e) => applyTextStyleToSelectedNodes({ textColor: e.target.value })}
+                  title="Custom Text Color"
+                  className="w-5 h-5 rounded border border-slate-300 dark:border-slate-600 bg-transparent cursor-pointer shrink-0"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  inlineCancelFlagRef.current = false;
+                  setInlineTextEdit({
+                    mode: 'edit',
+                    nodeId: firstSelectedNode.id,
+                    wx: firstSelectedNode.x,
+                    wy: firstSelectedNode.y,
+                    text: firstSelectedNode.text,
+                    fs: firstSelectedNode.fs ?? 16,
+                    textColor: firstSelectedNode.textColor ?? '',
+                    bold: Boolean(firstSelectedNode.bold),
+                    italic: Boolean(firstSelectedNode.italic),
+                    underline: Boolean(firstSelectedNode.underline),
+                  });
+                }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-[11px] font-medium whitespace-nowrap shrink-0 ml-0.5"
+              >
+                <Pencil className="w-3 h-3" />
+                <span>Edit</span>
+              </button>
+            </div>
+          </div>
+        )}
 
       {/* Diagram Studio Modal (Custom & Template Diagrams) */}
       {showDiagramStudio && (

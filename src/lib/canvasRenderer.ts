@@ -2622,6 +2622,38 @@ export function drawNodeLabelAndIcon(
   let textCenterY =
     node.y + safe.offsetY - (node.progress !== null && node.progress !== undefined ? 4 : 0);
 
+  const fontWeight =
+    node.bold === true
+      ? '700'
+      : node.bold === false || node.shape === 'text'
+      ? '400'
+      : '600';
+  const fontStyle: 'normal' | 'italic' = node.italic ? 'italic' : 'normal';
+  const fontPrefix = `${fontStyle === 'italic' ? 'italic ' : ''}${fontWeight}`;
+  const isUnderline = Boolean(node.underline);
+
+  const drawTextLineWithUnderline = (
+    line: string,
+    centerX: number,
+    centerY: number,
+    fontSize: number
+  ) => {
+    ctx.fillText(line, centerX, centerY);
+    if (isUnderline && line.trim().length > 0) {
+      const lineW = ctx.measureText(line).width;
+      const ulY = centerY + fontSize * 0.48;
+      ctx.save();
+      ctx.strokeStyle = textColor;
+      ctx.lineWidth = Math.max(1, fontSize * (fontWeight === '700' ? 0.085 : 0.065));
+      ctx.lineCap = 'butt';
+      ctx.beginPath();
+      ctx.moveTo(centerX - lineW / 2, ulY);
+      ctx.lineTo(centerX + lineW / 2, ulY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  };
+
   if (icon && pos === 'top') {
     if (vectorIcon) {
       drawVectorNodeIcon(ctx, icon, node.x, node.y - node.h * 0.22 + safe.offsetY, 17, textColor);
@@ -2655,9 +2687,11 @@ export function drawNodeLabelAndIcon(
       node.text,
       Math.max(24, availW - inlineIconSize - 6),
       Math.max(14, availH),
-      node.fs ?? 13
+      node.fs ?? 13,
+      fontWeight,
+      fontStyle
     );
-    ctx.font = `600 ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
+    ctx.font = `${fontPrefix} ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
     const maxLineW = layout.lines.reduce((m, l) => Math.max(m, ctx.measureText(l).width), 0);
     const gap = 5;
     const totalW = inlineIconSize + gap + maxLineW;
@@ -2670,7 +2704,7 @@ export function drawNodeLabelAndIcon(
     ctx.textBaseline = 'middle';
     const startY = textCenterY - ((layout.lines.length - 1) * layout.lineHeight) / 2;
     layout.lines.forEach((line, i) => {
-      ctx.fillText(line, shiftTextX, startY + i * layout.lineHeight);
+      drawTextLineWithUnderline(line, shiftTextX, startY + i * layout.lineHeight, layout.fontSize);
     });
     return;
   }
@@ -2681,15 +2715,17 @@ export function drawNodeLabelAndIcon(
     label,
     availW,
     Math.max(14, availH),
-    node.fs ?? 13
+    node.fs ?? 13,
+    fontWeight,
+    fontStyle
   );
-  ctx.font = `600 ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
+  ctx.font = `${fontPrefix} ${layout.fontSize}px "Plus Jakarta Sans", sans-serif`;
   ctx.fillStyle = textColor;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const startY = textCenterY - ((layout.lines.length - 1) * layout.lineHeight) / 2;
   layout.lines.forEach((line, i) => {
-    ctx.fillText(line, textCenterX, startY + i * layout.lineHeight);
+    drawTextLineWithUnderline(line, textCenterX, startY + i * layout.lineHeight, layout.fontSize);
   });
 }
 

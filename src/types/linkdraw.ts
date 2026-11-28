@@ -159,6 +159,9 @@ export interface GraphNode {
   borderWidth?: number;
   textColor?: string;
   fs?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
   icon?: string;
   iconPosition?: IconPosition;
   tags: string[];

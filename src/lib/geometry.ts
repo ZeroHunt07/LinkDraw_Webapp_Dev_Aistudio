@@ -645,18 +645,20 @@ export function computeFittedTextLayout(
   maxW: number,
   maxH: number,
   baseFontSize: number,
-  fontWeight = '600'
+  fontWeight = '600',
+  fontStyle: 'normal' | 'italic' = 'normal'
 ): { lines: string[]; fontSize: number; lineHeight: number } {
-  const key = `${text}|${Math.round(maxW)}|${Math.round(maxH)}|${baseFontSize}|${fontWeight}`;
+  const key = `${text}|${Math.round(maxW)}|${Math.round(maxH)}|${baseFontSize}|${fontWeight}|${fontStyle}`;
   const cached = textLayoutCache.get(key);
   if (cached) return cached;
 
   let fs = Math.max(8, Math.min(36, baseFontSize));
   let bestLines: string[] = [text];
   let bestFs = fs;
+  const fontPrefix = `${fontStyle === 'italic' ? 'italic ' : ''}${fontWeight}`;
 
   while (fs >= 8) {
-    ctx.font = `${fontWeight} ${fs}px "Plus Jakarta Sans", sans-serif`;
+    ctx.font = `${fontPrefix} ${fs}px "Plus Jakarta Sans", sans-serif`;
     const wrapped = wrapTextLines(ctx, text || 'Node', Math.max(24, maxW));
     const lineHeight = fs * 1.24;
     const totalH = wrapped.length * lineHeight;

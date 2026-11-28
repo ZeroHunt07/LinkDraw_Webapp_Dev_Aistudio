@@ -132,6 +132,9 @@ export function encodeNodePayload(node: GraphNode): Record<string, unknown> {
     payload.borderWidth = Math.max(0.5, Math.min(20, Math.round(Number(node.borderWidth) * 10) / 10));
   }
   if (node.textColor) payload.textColor = String(node.textColor);
+  if (node.bold !== undefined) payload.bold = Boolean(node.bold);
+  if (node.italic) payload.italic = true;
+  if (node.underline) payload.underline = true;
   if (node.tableData) {
     payload.tableHeaders = (node.tableData.headers ?? []).slice(0, 15).map(String);
     payload.tableRows = (node.tableData.rows ?? []).slice(0, 50).map((row) => ({
@@ -193,6 +196,9 @@ export function decodeNodePayload(id: string, p: Record<string, unknown>): Graph
       : {}),
     textColor: rawTextColor ? String(rawTextColor) : undefined,
     fs: Number(p.fs ?? 13),
+    ...(typeof p.bold === 'boolean' ? { bold: p.bold } : {}),
+    ...(p.italic === true ? { italic: true } : {}),
+    ...(p.underline === true ? { underline: true } : {}),
     icon: p.icon ? String(p.icon) : '',
     iconPosition: (rawIconPosition as GraphNode['iconPosition']) ?? 'inline',
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],

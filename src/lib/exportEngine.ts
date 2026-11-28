@@ -111,6 +111,9 @@ export function parseLinkDrawJSON(raw: string): { title?: string; graph: GraphDo
       : {}),
     textColor: n.textColor ? String(n.textColor) : n.text_color ? String(n.text_color) : undefined,
     fs: n.fs ? Number(n.fs) : 13,
+    ...(typeof n.bold === 'boolean' ? { bold: n.bold } : {}),
+    ...(n.italic === true ? { italic: true } : {}),
+    ...(n.underline === true ? { underline: true } : {}),
     icon: n.icon ? String(n.icon) : '',
     iconPosition: (n.iconPosition ?? n.icon_position ?? 'inline') as GraphNode['iconPosition'],
     tags: Array.isArray(n.tags) ? n.tags.map(String) : [],
@@ -301,8 +304,13 @@ export function exportSVG(doc: GraphDocument): string {
             }" fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeW}" />`;
       const iconStr = getIconDisplayText(n.icon);
       const label = (iconStr ? `${iconStr} ${n.text}` : n.text).trim();
+      const fw = n.bold === true ? '700' : n.bold === false || n.shape === 'text' ? '400' : '600';
+      const fStyle = n.italic ? ' font-style="italic"' : '';
+      const tDec = n.underline ? ' text-decoration="underline"' : '';
+      const fSize = n.fs ?? 13;
+      const tFill = escapeXml(n.textColor || '#0f172a');
       const textSvg = label
-        ? `<text x="${n.x}" y="${n.y + 4}" font-family="sans-serif" font-size="12" font-weight="600" fill="#0f172a" text-anchor="middle">${escapeXml(
+        ? `<text x="${n.x}" y="${n.y + 4}" font-family="sans-serif" font-size="${fSize}" font-weight="${fw}"${fStyle}${tDec} fill="${tFill}" text-anchor="middle">${escapeXml(
             label
           )}</text>`
         : '';
